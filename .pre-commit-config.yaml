@@ -1,0 +1,31 @@
+# ============================================
+# Pre-commit 钩子配置
+# 运行 `pre-commit install` 安装 Git 钩子
+# 手动运行所有文件: `pre-commit run --all-files`
+# ============================================
+
+repos:
+  # --------------------------------------------------
+  # 通用检查：行尾空格、文件末尾换行、YAML/JSON 格式等
+  # --------------------------------------------------
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace      # 删除行尾空格
+      - id: end-of-file-fixer        # 文件末尾添加换行
+      - id: check-yaml               # 检查 YAML 文件格式
+      - id: check-json               # 检查 JSON 文件格式
+      - id: check-toml               # 检查 TOML 文件格式
+      - id: check-added-large-files  # 禁止提交大文件
+      - id: detect-private-key       # 检测是否误提交私钥
+      - id: check-merge-conflict     # 检测未解决的合并冲突
+
+  # --------------------------------------------------
+  # Ruff — 代码格式化和静态检查
+  # --------------------------------------------------
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.14
+    hooks:
+      - id: ruff                     # 代码检查（Lint）
+        args: [--fix]
+      - id: ruff-format              # 代码格式化（Format）

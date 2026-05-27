@@ -1,0 +1,50 @@
+[project]
+name = "genshin-quest-voice-over"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.6.0",
+    "ruff>=0.15.14",
+]
+
+# ============================================
+# Ruff 配置 — 代码格式化和静态检查
+# ============================================
+[tool.ruff]
+# 目标 Python 版本
+target-version = "py312"
+# 代码行宽
+line-length = 120
+
+[tool.ruff.lint]
+# 启用的规则集
+select = [
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "F",     # Pyflakes
+    "I",     # isort (import 排序)
+    "N",     # pep8-naming (命名规范)
+    "UP",    # pyupgrade (语法现代化)
+    "B",     # flake8-bugbear (常见 bug 检查)
+    "C4",    # flake8-comprehensions
+    "SIM",   # flake8-simplify (简化代码)
+    "TCH",   # flake8-type-checking (类型检查导入)
+]
+# 忽略的规则
+ignore = [
+    "E501",  # 行长度由 formatter 处理
+    "B008",  # 允许在函数参数中直接调用
+]
+
+[tool.ruff.format]
+# 使用单引号还是双引号
+quote-style = "double"
+# 缩进风格
+indent-style = "space"
+# 在代码嵌套表达式中，是否添加额外的括号来消除运算符优先级歧义
+skip-magic-trailing-comma = false
