@@ -1,0 +1,72 @@
+---
+description:
+alwaysApply: true
+enabled: true
+updatedAt: 2026-05-27T04:18:00.000Z
+provider:
+---
+
+# 代码风格规则
+
+## 类型表达
+
+### 优先使用 dataclass 替代匿名 tuple
+
+在接口、数据模型或类成员变量中，**禁止使用匿名 `tuple` 来表达复合数据结构**。
+应定义具名 `dataclass`，通过有意义的字段名称来明确每个值的含义。
+
+**反例**（应避免）：
+
+```python
+# 区域坐标 — 四个 int 含义不明，顺序容易搞错
+region: tuple[int, int, int, int]
+
+# 坐标点 — 需要靠注释说明 x/y 顺序
+points: list[tuple[int, int]]
+```
+
+**正例**（推荐）：
+
+```python
+from dataclasses import dataclass
+
+@dataclass
+class Region:
+    """矩形区域。"""
+    left: int
+    top: int
+    right: int
+    bottom: int
+
+@dataclass
+class Point:
+    """二维坐标点。"""
+    x: int
+    y: int
+
+# 使用具名类型，语义清晰，IDE 有自动补全
+region: Region
+points: list[Point]
+```
+
+### 共享数据类存放位置
+
+被多个模块引用的通用数据类（如 `Point`、`Region`）应放在 `src/common.py` 中。
+仅单个模块内部使用的数据类，定义在该模块的对应文件中即可。
+
+## 命名规范
+
+- 类名使用 PascalCase：`CaptureConfig`、`RecognitionResult`
+- 变量名、函数名使用 snake_case：`is_initialized`、`audio_data`
+- 常量使用 UPPER_SNAKE_CASE：`DEFAULT_FPS`
+- 私有成员以单下划线开头：`_internal_state`
+
+## 方法长度
+
+- 单个方法不超过 100 行，超过部分应拆分为多个私有辅助方法。
+
+## 注释规范
+
+- 代码注释默认使用中文。
+- 对外 API（抽象方法、公开方法、数据类字段）必须书写 docstring，说明参数、返回值和可能抛出的异常。
+- 日志输出使用英文。
