@@ -11,6 +11,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pre-commit>=4.6.0",
+    "pyrefly>=1.2.0",
     "ruff>=0.15.14",
 ]
 
@@ -60,7 +61,8 @@ project-includes = ["src"]
 # 以项目根目录为导入根，使 `src` 成为顶层包，
 # 从而正确解析 `from src.xxx import ...` 这类导入
 search-path = ["."]
-# 虚拟环境中的第三方包路径，用于解析已安装依赖（如 numpy）
+# 虚拟环境中的第三方包路径，用于 IDE 语言服务器解析已安装依赖（如 numpy）。
+# 命令行 pyrefly 可从解释器自动获取，但 IDE 语言服务器依赖此显式配置。
 site-package-path = [".venv/lib/site-packages"]
 # 目标 Python 版本
 python-version = "3.12"

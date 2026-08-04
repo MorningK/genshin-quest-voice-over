@@ -7,6 +7,7 @@
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from dataclasses import dataclass
+from math import isfinite
 
 
 @dataclass
@@ -33,8 +34,12 @@ class TTSConfig:
 
     def __post_init__(self) -> None:
         """构造后校验配置参数，避免无效值流入引擎。"""
+        if not isfinite(self.rate):
+            raise ValueError("rate must be finite")
         if self.rate <= 0:
             raise ValueError("rate must be > 0")
+        if not isfinite(self.volume):
+            raise ValueError("volume must be finite")
         if self.volume < 0:
             raise ValueError("volume must be >= 0")
         if self.sample_rate <= 0:
