@@ -38,6 +38,13 @@ class Region:
     right: int
     bottom: int
 
+    def __post_init__(self) -> None:
+        """构造后校验边界，防止出现负宽高。"""
+        if self.right < self.left:
+            raise ValueError("right must be >= left")
+        if self.bottom < self.top:
+            raise ValueError("bottom must be >= top")
+
     @property
     def width(self) -> int:
         """区域宽度（像素）。"""

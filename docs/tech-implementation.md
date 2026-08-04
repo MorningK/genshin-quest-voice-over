@@ -175,7 +175,7 @@ class RecognitionConfig:
 @dataclass
 class RecognitionBox:
     """单个文字区域边界框"""
-    points: List[Tuple[int, int]]                     # 四个顶点 [(x1,y1), (x2,y2), (x3,y3), (x4,y4)]
+    points: list[Point]                               # 四个顶点，类型见 src/common.py 的 Point
     text: str
     confidence: float
 

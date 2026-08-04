@@ -1,10 +1,12 @@
 [project]
 name = "genshin-quest-voice-over"
 version = "0.1.0"
-description = "Add your description here"
+description = "Genshin Impact quest dialogue voice-over generation system"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "numpy>=2.5.1",
+]
 
 [dependency-groups]
 dev = [
@@ -48,3 +50,17 @@ quote-style = "double"
 indent-style = "space"
 # 在代码嵌套表达式中，是否添加额外的括号来消除运算符优先级歧义
 skip-magic-trailing-comma = false
+
+# ============================================
+# Pyrefly 配置 — 类型检查
+# ============================================
+[tool.pyrefly]
+# 要类型检查的源码
+project-includes = ["src"]
+# 以项目根目录为导入根，使 `src` 成为顶层包，
+# 从而正确解析 `from src.xxx import ...` 这类导入
+search-path = ["."]
+# 虚拟环境中的第三方包路径，用于解析已安装依赖（如 numpy）
+site-package-path = [".venv/lib/site-packages"]
+# 目标 Python 版本
+python-version = "3.12"

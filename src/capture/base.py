@@ -6,6 +6,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from typing import Any, Literal
 
 from src.common import Region
 
@@ -26,7 +27,7 @@ class CaptureConfig:
     fps: int = 4
     window_title: str | None = None
     monitor_index: int = 0
-    output_format: str = "bgr"
+    output_format: Literal["bgr", "rgb", "pil"] = "bgr"
 
 
 @dataclass
@@ -39,7 +40,7 @@ class CaptureResult:
         region: 实际截取区域。
     """
 
-    image: bytes
+    image: Any
     timestamp: float
     region: Region = field(default_factory=lambda: Region(left=0, top=0, right=0, bottom=0))
 

@@ -31,6 +31,17 @@ class TTSConfig:
     model_path: str | None = None
     sample_rate: int = 24000
 
+    def __post_init__(self) -> None:
+        """构造后校验配置参数，避免无效值流入引擎。"""
+        if self.rate <= 0:
+            raise ValueError("rate must be > 0")
+        if self.volume < 0:
+            raise ValueError("volume must be >= 0")
+        if self.sample_rate <= 0:
+            raise ValueError("sample_rate must be > 0")
+        if self.offline and not self.model_path:
+            raise ValueError("model_path is required when offline=True")
+
 
 @dataclass
 class TTSResult:

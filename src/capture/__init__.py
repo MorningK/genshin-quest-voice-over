@@ -7,8 +7,8 @@ from src.capture.base import CaptureConfig, CaptureResult, ScreenCapture
 from src.common import Region
 
 __all__ = [
-    "ScreenCapture",
     "CaptureConfig",
     "CaptureResult",
     "Region",
+    "ScreenCapture",
 ]

@@ -7,9 +7,9 @@ from src.common import Point
 from src.recognition.base import RecognitionBox, RecognitionConfig, RecognitionResult, TextRecognizer
 
 __all__ = [
-    "TextRecognizer",
+    "Point",
+    "RecognitionBox",
     "RecognitionConfig",
     "RecognitionResult",
-    "RecognitionBox",
-    "Point",
+    "TextRecognizer",
 ]

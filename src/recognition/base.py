@@ -6,8 +6,12 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from src.common import Point
+
+if TYPE_CHECKING:
+    import numpy as np
 
 
 @dataclass
@@ -87,7 +91,7 @@ class TextRecognizer(ABC):
         ...
 
     @abstractmethod
-    def recognize(self, image: bytes) -> RecognitionResult:
+    def recognize(self, image: "np.ndarray | bytes") -> RecognitionResult:
         """对输入图像执行文字识别。
 
         Args:

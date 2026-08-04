@@ -6,7 +6,7 @@
 from src.tts.base import TextToSpeech, TTSConfig, TTSResult
 
 __all__ = [
-    "TextToSpeech",
     "TTSConfig",
     "TTSResult",
+    "TextToSpeech",
 ]
