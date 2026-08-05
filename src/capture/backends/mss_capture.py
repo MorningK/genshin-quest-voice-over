@@ -49,9 +49,7 @@ class MSSCapture(ScreenCapture):
         try:
             import mss  # pyrefly: ignore=missing-import  # 惰性导入，避免未安装时启动失败
         except ImportError as exc:
-            raise RuntimeError(
-                "mss is not installed. Run `uv add --optional capture mss` to enable MSS capture."
-            ) from exc
+            raise RuntimeError("mss is not installed. Run `uv sync --extra capture` to enable MSS capture.") from exc
 
         self._sct = mss.mss()
         self._config = config
@@ -60,7 +58,8 @@ class MSSCapture(ScreenCapture):
             # 全屏模式：使用指定显示器或主显示器
             monitors = self._sct.monitors
             index = config.monitor_index + 1
-            if index >= len(monitors):
+            # index < 1 表示 monitor_index < 0，会错误选中 MSS 的"全部显示器"虚拟项
+            if index < 1 or index >= len(monitors):
                 raise RuntimeError(f"Monitor index {config.monitor_index} is out of range.")
             self._monitor = monitors[index]
         else:

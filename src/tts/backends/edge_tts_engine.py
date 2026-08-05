@@ -19,30 +19,20 @@ from src.tts.base import TextToSpeech, TTSConfig, TTSResult
 
 logger = logging.getLogger(__name__)
 
+# 拉取音色列表的网络请求超时（秒），避免网络挂起导致应用永久阻塞
+_VOICE_LIST_TIMEOUT = 10.0
 
-def _rate_percent(rate: float) -> str:
-    """将语速倍率转换为 Edge TTS 所需的百分比字符串。
+
+def _multiplier_percent(multiplier: float) -> str:
+    """将语速/音量倍率转换为 Edge TTS 所需的相对百分比字符串。
 
     Args:
-        rate: 语速倍率，1.0 为正常。
+        multiplier: 语速或音量倍率，1.0 为正常。
 
     Returns:
         形如 "+20%"、"-10%" 的百分比字符串。
     """
-    percent = round((rate - 1.0) * 100)
-    return f"{percent:+d}%"
-
-
-def _volume_percent(volume: float) -> str:
-    """将音量倍率转换为 Edge TTS 所需的百分比字符串。
-
-    Args:
-        volume: 音量倍率，1.0 为正常。
-
-    Returns:
-        形如 "+0%"、"-50%" 的百分比字符串。
-    """
-    percent = round((volume - 1.0) * 100)
+    percent = round((multiplier - 1.0) * 100)
     return f"{percent:+d}%"
 
 
@@ -59,6 +49,7 @@ class EdgeTTSEngine(TextToSpeech):
 
     def __init__(self) -> None:
         """初始化实例，尚未建立连接。"""
+        self._edge_tts: Any = None
         self._config: TTSConfig | None = None
         self._initialized = False
         self._voices: list[str] = []
@@ -84,14 +75,17 @@ class EdgeTTSEngine(TextToSpeech):
             import edge_tts  # pyrefly: ignore=missing-import  # 惰性导入，避免未安装时启动失败
         except ImportError as exc:
             raise RuntimeError(
-                "edge-tts is not installed. Run `uv add --optional tts-online edge-tts` to enable Edge TTS."
+                "edge-tts is not installed. Run `uv sync --extra tts-online` to enable Edge TTS."
             ) from exc
 
         self._edge_tts = edge_tts
         self._config = config
 
+        async def _fetch_voices() -> Any:
+            return await asyncio.wait_for(self._edge_tts.list_voices(), timeout=_VOICE_LIST_TIMEOUT)
+
         try:
-            voice_infos = asyncio.run(self._edge_tts.list_voices())
+            voice_infos = asyncio.run(_fetch_voices())
             self._voices = [str(v["ShortName"]) for v in voice_infos]
         except Exception as exc:
             raise ConnectionError("Failed to fetch Edge TTS voice list. Please check your network.") from exc
@@ -186,26 +180,30 @@ class EdgeTTSEngine(TextToSpeech):
         thread = threading.Thread(target=_worker, daemon=True)
         thread.start()
 
+        # 缓冲一个 chunk，使中间片段的 is_final=False、最后一个片段 is_final=True，
+        # 符合 TextToSpeech.synthesize_stream 的契约。
+        completed = False
         try:
+            pending: bytes | None = None
             while True:
                 chunk = result_queue.get()
                 if chunk is None:
+                    if pending is not None:
+                        yield self._make_chunk(pending, text, is_final=True)
+                    completed = True
                     break
-                yield TTSResult(
-                    audio_data=chunk,
-                    format="mp3",
-                    duration=0.0,
-                    sample_rate=self._config.sample_rate,
-                    text=text,
-                    is_final=False,
-                )
+                if pending is not None:
+                    yield self._make_chunk(pending, text, is_final=False)
+                pending = chunk
         finally:
-            thread.join()
-            if error_holder:
+            thread.join(timeout=5.0)
+            # 仅在正常迭代完毕后传播工作线程错误，避免 GeneratorExit 期间替换异常
+            if completed and error_holder:
                 raise RuntimeError("Failed to stream synthesis with Edge TTS.") from error_holder[0]
 
     def release(self) -> None:
         """释放 Edge TTS 引擎占用的资源。"""
+        self._edge_tts = None
         self._config = None
         self._voices = []
         self._initialized = False
@@ -221,6 +219,27 @@ class EdgeTTSEngine(TextToSpeech):
         """返回当前引擎支持的音色列表。"""
         return list(self._voices)
 
+    def _make_chunk(self, data: bytes, text: str, *, is_final: bool) -> TTSResult:
+        """构造单个流式片段结果。
+
+        Args:
+            data: 该片段的 MP3 音频数据。
+            text: 对应的原始输入文本。
+            is_final: 是否为最后一个片段。
+
+        Returns:
+            TTSResult 对象，格式固定为 MP3。
+        """
+        assert self._config is not None
+        return TTSResult(
+            audio_data=data,
+            format="mp3",
+            duration=0.0,
+            sample_rate=self._config.sample_rate,
+            text=text,
+            is_final=is_final,
+        )
+
     def _build_communicate(self, text: str) -> Any:
         """根据配置构造 edge_tts.Communicate 对象。
 
@@ -235,15 +254,15 @@ class EdgeTTSEngine(TextToSpeech):
         return self._edge_tts.Communicate(
             text,
             config.voice,
-            rate=_rate_percent(config.rate),
-            volume=_volume_percent(config.volume),
+            rate=_multiplier_percent(config.rate),
+            volume=_multiplier_percent(config.volume),
         )
 
 
 def _estimate_duration(audio_data: bytes) -> float:
     """粗略估算 MP3 音频时长（秒）。
 
-    根据 MP3 字节数与常见 128kbps 码率估算，用于粗略的时长参考。
+    Edge TTS 默认输出 48kbps 的恒定码率流，据此估算时长。
 
     Args:
         audio_data: MP3 音频字节。
@@ -253,5 +272,5 @@ def _estimate_duration(audio_data: bytes) -> float:
     """
     if not audio_data:
         return 0.0
-    # 假设 128 kbps 恒定码率
-    return len(audio_data) * 8 / 128_000
+    # Edge TTS 默认 48 kbps 恒定码率
+    return len(audio_data) * 8 / 48_000

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 import tempfile
 import wave
 from abc import ABC, abstractmethod
@@ -15,18 +16,20 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    import winsound
+    from types import ModuleType
 
     from src.tts import TTSResult
 
 logger = logging.getLogger(__name__)
 
 
-def _mp3_to_wav(mp3_data: bytes, sample_rate: int = 44100, channels: int = 2) -> bytes:
-    """用 miniaudio 将 MP3 音频解码并封装为 WAV 字节。
+def _decode_to_wav(audio_data: bytes, sample_rate: int = 44100, channels: int = 2) -> bytes:
+    """用 miniaudio 将非 WAV 音频解码并封装为 WAV 字节。
+
+    使用 ``miniaudio.decode`` 自动识别输入容器，可解码 MP3、OGG、FLAC 等格式。
 
     Args:
-        mp3_data: MP3 音频字节。
+        audio_data: 待解码的音频字节。
         sample_rate: 目标采样率，miniaudio 会重采样到此值。
         channels: 目标声道数。
 
@@ -40,11 +43,11 @@ def _mp3_to_wav(mp3_data: bytes, sample_rate: int = 44100, channels: int = 2) ->
         import miniaudio  # pyrefly: ignore=missing-import  # 惰性导入，未安装时优雅降级
     except ImportError as exc:
         raise RuntimeError(
-            "miniaudio is not installed. Run `uv add --optional playback miniaudio` to enable mp3 playback."
+            "miniaudio is not installed. Run `uv sync --extra playback` to enable non-WAV playback."
         ) from exc
 
     decoded = miniaudio.decode(
-        mp3_data,
+        audio_data,
         output_format=miniaudio.SampleFormat.SIGNED16,
         nchannels=channels,
         sample_rate=sample_rate,
@@ -53,7 +56,8 @@ def _mp3_to_wav(mp3_data: bytes, sample_rate: int = 44100, channels: int = 2) ->
 
     buffer = io.BytesIO()
     with wave.open(buffer, "wb") as wav_file:
-        wav_file.setnchannels(channels)
+        # 写入实际解码得到的声道数，确保 WAV 头与 PCM 负载一致
+        wav_file.setnchannels(decoded.nchannels)
         wav_file.setsampwidth(decoded.sample_width)
         wav_file.setframerate(decoded.sample_rate)
         wav_file.writeframes(pcm)
@@ -84,6 +88,18 @@ class AudioPlayer(ABC):
         """
         ...
 
+    @abstractmethod
+    def initialize(self) -> bool:
+        """初始化播放能力。
+
+        Returns:
+            True 表示初始化成功。
+
+        Raises:
+            RuntimeError: 初始化失败时抛出。
+        """
+        ...
+
     @property
     @abstractmethod
     def is_initialized(self) -> bool:
@@ -107,7 +123,7 @@ class WinsoundPlayer(AudioPlayer):
 
     def __init__(self) -> None:
         """初始化实例，尚未建立播放能力。"""
-        self._winsound: winsound = None  # type: ignore[assignment]
+        self._winsound: ModuleType | None = None
         self._initialized = False
 
     def initialize(self) -> bool:
@@ -138,7 +154,7 @@ class WinsoundPlayer(AudioPlayer):
         Raises:
             RuntimeError: 播放器未初始化时抛出。
         """
-        if not self._initialized:
+        if not self._initialized or self._winsound is None:
             raise RuntimeError("Winsound player is not initialized.")
         if not result.audio_data:
             return
@@ -147,9 +163,9 @@ class WinsoundPlayer(AudioPlayer):
         if audio_format == "wav":
             wav_data = result.audio_data
         else:
-            # winsound 原生仅支持 WAV，先用 miniaudio 将 mp3 解码为 WAV
+            # winsound 原生仅支持 WAV，先用 miniaudio 将音频解码为 WAV
             try:
-                wav_data = _mp3_to_wav(result.audio_data)
+                wav_data = _decode_to_wav(result.audio_data)
             except RuntimeError as exc:
                 logger.info("Skip playback: %s", exc)
                 return
@@ -157,7 +173,10 @@ class WinsoundPlayer(AudioPlayer):
                 logger.warning("Failed to decode audio format '%s': %s", audio_format, exc)
                 return
 
-        temp_path = Path(tempfile.gettempdir()) / f"genshin_vo_{id(result):x}.wav"
+        # 用 mkstemp 独占创建临时文件，避免基于可预测路径的不安全写入
+        fd, temp_path_str = tempfile.mkstemp(prefix="genshin_vo_", suffix=".wav")
+        os.close(fd)
+        temp_path = Path(temp_path_str)
         try:
             temp_path.write_bytes(wav_data)
             self._winsound.PlaySound(str(temp_path), self._winsound.SND_FILENAME)

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import numpy as np
 
@@ -47,7 +47,7 @@ class PaddleOCREngine(TextRecognizer):
     未安装时抛出带明确提示的 RuntimeError。
     """
 
-    _LANG_MAP: dict[str, str] = {
+    _LANG_MAP: ClassVar[dict[str, str]] = {
         "ch": "ch",
         "en": "en",
         "ch_en": "ch",
@@ -80,9 +80,7 @@ class PaddleOCREngine(TextRecognizer):
         try:
             from paddleocr import PaddleOCR  # pyrefly: ignore=missing-import  # 惰性导入，避免未安装时启动失败
         except ImportError as exc:
-            raise RuntimeError(
-                "paddleocr is not installed. Run `uv add --optional ocr paddleocr paddlepaddle` to enable PaddleOCR."
-            ) from exc
+            raise RuntimeError("paddleocr is not installed. Run `uv sync --extra ocr` to enable PaddleOCR.") from exc
 
         if config.model_dir is not None:
             import os
@@ -194,8 +192,8 @@ class PaddleOCREngine(TextRecognizer):
             return image
 
         scale = PaddleOCREngine._MAX_INPUT_SIZE / max_side
-        new_h = max(1, int(round(height * scale)))
-        new_w = max(1, int(round(width * scale)))
+        new_h = max(1, round(height * scale))
+        new_w = max(1, round(width * scale))
         return _resize_nearest(image, new_h, new_w)
 
     def release(self) -> None:

@@ -19,18 +19,22 @@
 uv sync
 ```
 
-核心运行仅依赖 `numpy`，各后端库按需通过可选依赖组安装：
+核心运行仅依赖 `numpy`，各后端库按需通过可选依赖组激活。可选依赖已在 `pyproject.toml` 中声明，激活时使用 `uv sync --extra <组名>`：
 
-| 模块 | 可选依赖组 | 安装命令 |
+| 模块 | 可选依赖组 | 激活命令 |
 |------|-----------|---------|
-| 屏幕捕获（DXCam + MSS） | `capture` | `uv add --optional capture dxcam mss` |
-| OCR（RapidOCR 默认） | `ocr-rapid` | `uv add --optional ocr-rapid rapidocr onnxruntime` |
-| OCR（PaddleOCR 备选） | `ocr` | `uv add --optional ocr paddleocr paddlepaddle` |
-| TTS（Edge TTS 在线） | `tts-online` | `uv add --optional tts-online edge-tts` |
-| 播放（mp3 解码） | `playback` | `uv add --optional playback miniaudio` |
+| 屏幕捕获（DXCam + MSS） | `capture` | `uv sync --extra capture` |
+| OCR（RapidOCR 默认） | `ocr-rapid` | `uv sync --extra ocr-rapid` |
+| OCR（PaddleOCR 备选） | `ocr` | `uv sync --extra ocr` |
+| TTS（Edge TTS 在线） | `tts-online` | `uv sync --extra tts-online` |
+| 播放（非 WAV 解码） | `playback` | `uv sync --extra playback` |
 
-后端依赖未安装时，应用会给出对应的安装提示并自动尝试降级到备选后端。
-> 注意：Edge TTS 输出 MP3，需安装 `playback` 组（miniaudio）才能用 winsound 播放；未安装时应用会跳过播放。
+激活单个组可用 `uv sync --extra capture --extra ocr-rapid --extra tts-online --extra playback`，或一次性激活全部用 `uv sync --all-extras`。
+
+后端依赖未激活时，应用会给出对应的激活提示并自动尝试降级到备选后端。
+> 注意：Edge TTS 输出 MP3，需激活 `playback` 组（miniaudio）才能用 winsound 播放；未激活时应用会跳过播放。
+
+> 隐私提示：使用 Edge TTS（在线 TTS）时，从屏幕捕获并经 OCR 识别出的文本会通过网络发送至微软 Edge TTS API 进行语音合成。若对隐私敏感，请使用离线 TTS（VITS）后端。
 
 ## 运行
 
@@ -49,6 +53,9 @@ uv run python main.py --capture mss --ocr paddle --tts edge
 
 # 指定 OCR 语言与 TTS 音色
 uv run python main.py --language ch --voice zh-CN-XiaoxiaoNeural
+
+# 使用离线 TTS（VITS，需指定模型路径；当前为骨架实现，实际推理待接入）
+uv run python main.py --tts vits --tts-model-path /path/to/model
 ```
 
 按 `Ctrl+C` 优雅停止并释放资源。

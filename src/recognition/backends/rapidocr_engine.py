@@ -62,8 +62,7 @@ class RapidOCREngine(TextRecognizer):
             from rapidocr import RapidOCR
         except ImportError as exc:
             raise RuntimeError(
-                "rapidocr (and onnxruntime) is not installed. "
-                "Run `uv add --optional ocr-rapid rapidocr onnxruntime` to enable RapidOCR."
+                "rapidocr (and onnxruntime) is not installed. Run `uv sync --extra ocr-rapid` to enable RapidOCR."
             ) from exc
 
         params: dict[str, Any] = {

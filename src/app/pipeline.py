@@ -23,18 +23,18 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# 各后端对应的安装提示，便于依赖缺失时给出可操作指引
+# 各后端对应的激活命令提示，便于依赖缺失时给出可操作指引
 _CAPTURE_INSTALL_HINT = {
-    "dxcam": "uv add --optional capture dxcam",
-    "mss": "uv add --optional capture mss",
+    "dxcam": "uv sync --extra capture",
+    "mss": "uv sync --extra capture",
 }
 _OCR_INSTALL_HINT = {
-    "paddle": "uv add --optional ocr paddleocr paddlepaddle",
-    "rapid": "uv add --optional ocr-rapid rapidocr onnxruntime",
+    "paddle": "uv sync --extra ocr",
+    "rapid": "uv sync --extra ocr-rapid",
 }
 _TTS_INSTALL_HINT = {
-    "edge": "uv add --optional tts-online edge-tts",
-    "vits": "uv add --optional tts-offline <offline-tts-package>",
+    "edge": "uv sync --extra tts-online",
+    "vits": "uv sync --extra tts-offline",
 }
 
 
@@ -146,7 +146,7 @@ def _try_init_primary_and_fallback(
     for backend in (primary, fallback):
         try:
             return build_fn(backend)
-        except (RuntimeError, ImportError) as exc:
+        except (RuntimeError, ImportError, ConnectionError) as exc:
             logger.warning("Failed to init %s backend '%s': %s", label, backend, exc)
     raise RuntimeError(
         f"Failed to initialize {label}. Please install the required dependency: {hint_map.get(primary, '')}"
@@ -183,9 +183,9 @@ class VoiceOverApp:
         Returns:
             退出码，0 表示正常退出，非 0 表示初始化失败。
         """
-        if not self._initialize():
-            return 1
         try:
+            if not self._initialize():
+                return 1
             self._run_loop()
         except KeyboardInterrupt:
             logger.info("Received KeyboardInterrupt, stopping.")
@@ -247,7 +247,8 @@ class VoiceOverApp:
             self._player = player
         except KeyboardInterrupt:
             raise
-        except (RuntimeError, ImportError) as exc:
+        except (RuntimeError, ImportError, ValueError) as exc:
+            # ValueError 用于捕获如 vits 缺 model_path 等配置校验错误，优雅退出
             logger.error("Initialization failed: %s", exc)
             return False
 

@@ -30,6 +30,7 @@ class AppConfig:
         fps: 目标帧率。
         language: OCR 识别语言。
         voice: TTS 音色。
+        tts_model_path: 离线 TTS 模型路径，仅 tts_backend="vits" 时使用。
     """
 
     capture_backend: str = "dxcam"
@@ -39,6 +40,7 @@ class AppConfig:
     fps: int = DEFAULT_FPS
     language: str = DEFAULT_LANGUAGE
     voice: str = DEFAULT_VOICE
+    tts_model_path: str | None = None
 
     def to_capture_config(self) -> CaptureConfig:
         """转换为屏幕捕获配置。
@@ -60,8 +62,15 @@ class AppConfig:
         """转换为 TTS 合成配置。
 
         Returns:
-            TTSConfig 对象，音色由 AppConfig.voice 决定。
+            TTSConfig 对象；当 tts_backend="vits" 时返回离线配置（offline=True 与 model_path）。
+
+        Raises:
+            ValueError: vits 后端未指定 tts_model_path 时抛出。
         """
+        if self.tts_backend == "vits":
+            if not self.tts_model_path:
+                raise ValueError("--tts-model-path is required when using vits backend.")
+            return TTSConfig(voice=self.voice, offline=True, model_path=self.tts_model_path)
         return TTSConfig(voice=self.voice)
 
 
@@ -113,6 +122,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fps", type=int, default=DEFAULT_FPS, help=f"目标帧率（默认 {DEFAULT_FPS}）")
     parser.add_argument("--language", default=DEFAULT_LANGUAGE, help=f"OCR 识别语言（默认 {DEFAULT_LANGUAGE}）")
     parser.add_argument("--voice", default=DEFAULT_VOICE, help=f"TTS 音色（默认 {DEFAULT_VOICE}）")
+    parser.add_argument(
+        "--tts-model-path",
+        default=None,
+        help="离线 TTS（vits）模型路径，使用 --tts vits 时必须指定",
+    )
     return parser
 
 
@@ -137,4 +151,5 @@ def parse_args(argv: list[str] | None = None) -> AppConfig:
         fps=args.fps,
         language=args.language,
         voice=args.voice,
+        tts_model_path=args.tts_model_path,
     )

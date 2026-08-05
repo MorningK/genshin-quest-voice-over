@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any
+from typing import Any, ClassVar
 
 import numpy as np
 
@@ -27,7 +27,7 @@ class DXCamCapture(ScreenCapture):
     未安装时抛出带明确提示的 RuntimeError。
     """
 
-    _COLOR_MAP: dict[str, str] = {
+    _COLOR_MAP: ClassVar[dict[str, str]] = {
         "bgr": "BGR",
         "rgb": "RGB",
         "pil": "RGB",
@@ -37,6 +37,7 @@ class DXCamCapture(ScreenCapture):
         """初始化实例，尚未占用任何资源。"""
         self._camera: Any = None
         self._config: CaptureConfig | None = None
+        self._last_frame: Any = None
         self._initialized = False
 
     def initialize(self, config: CaptureConfig) -> bool:
@@ -55,26 +56,19 @@ class DXCamCapture(ScreenCapture):
             import dxcam  # pyrefly: ignore=missing-import  # 惰性导入，避免未安装时启动失败
         except ImportError as exc:
             raise RuntimeError(
-                "dxcam is not installed. Run `uv add --optional capture dxcam` to enable DXCam capture."
+                "dxcam is not installed. Run `uv sync --extra capture` to enable DXCam capture."
             ) from exc
 
-        if config.region is None:
-            # 全屏模式：使用默认显示器
-            self._camera = dxcam.create(
-                output_idx=config.monitor_index,
-                output_color=self._COLOR_MAP[config.output_format],  # pyrefly: ignore=bad-argument-type
-            )
-            self._config = config
-        else:
+        create_kwargs: dict[str, Any] = {
+            "output_idx": config.monitor_index,
+            "output_color": self._COLOR_MAP[config.output_format],  # pyrefly: ignore=bad-argument-type
+        }
+        if config.region is not None:
             # 区域模式：DXCam 原生支持 region 裁剪
             region = config.region
-            region_tuple = (region.left, region.top, region.right, region.bottom)
-            self._camera = dxcam.create(
-                output_idx=config.monitor_index,
-                region=region_tuple,
-                output_color=self._COLOR_MAP[config.output_format],  # pyrefly: ignore=bad-argument-type
-            )
-            self._config = config
+            create_kwargs["region"] = (region.left, region.top, region.right, region.bottom)
+        self._camera = dxcam.create(**create_kwargs)
+        self._config = config
 
         if self._camera is None:
             raise RuntimeError("Failed to create DXCam camera instance.")
@@ -97,9 +91,14 @@ class DXCamCapture(ScreenCapture):
 
         frame = self._camera.grab()
         if frame is None:
-            raise RuntimeError("Failed to grab frame from DXCam.")
-
-        image = np.asarray(frame)
+            # 屏幕内容无变化时 DXCam 返回 None，属于正常"无新帧"情况；
+            # 复用最后成功捕获的帧，避免中断捕获循环。
+            if self._last_frame is None:
+                raise RuntimeError("Failed to grab first frame from DXCam.")
+            image = self._last_frame
+        else:
+            image = np.asarray(frame)
+            self._last_frame = image
         if self._config is not None and self._config.region is not None:
             region = self._config.region
         else:
@@ -116,6 +115,7 @@ class DXCamCapture(ScreenCapture):
             except Exception:  # noqa: BLE001 - 释放阶段的异常不应向上传播
                 logger.exception("Failed to stop DXCam camera.")
             self._camera = None
+        self._last_frame = None
         self._initialized = False
         logger.info("DXCam capture released.")
 
