@@ -120,8 +120,8 @@ OCR 是核心识别环节，最关键指标是**中文识别准确率**。原神
 
 | 方案 | 中文准确率 | 速度 | GPU 加速 | 离线可用 | 模型体积 | 许可证 | 说明 |
 |------|-----------|------|---------|---------|---------|--------|------|
+| **RapidOCR** | ⭐⭐⭐⭐ 高 | ⭐⭐⭐⭐⭐ 极快 | ✅（ONNX Runtime） | ✅ | ~10MB | Apache 2.0 | PaddleOCR 模型的 ONNX 运行时版本，省去 PaddlePaddle 框架依赖，部署更轻便；项目默认引擎 |
 | **PaddleOCR** | ⭐⭐⭐⭐⭐ 极高 | ⭐⭐⭐⭐ 快 | ✅ | ✅ | ~100MB（轻量模型） | Apache 2.0 | 百度开源，中文识别王者；提供轻量 PP-OCR 模型，平衡速度和精度 |
-| **RapidOCR** | ⭐⭐⭐⭐ 高 | ⭐⭐⭐⭐⭐ 极快 | ❌（ONNX Runtime） | ✅ | ~10MB | Apache 2.0 | PaddleOCR 的 ONNX 运行时版本，省去 PaddlePaddle 框架依赖，部署更轻便 |
 | **EasyOCR** | ⭐⭐⭐ 中等 | ⭐⭐ 较慢 | ✅ | ✅ | ~200MB+ | Apache 2.0 | 支持 80+ 语言，中文表现逊于 PaddleOCR；首次加载较慢 |
 | **Tesseract (pytesseract)** | ⭐⭐ 一般 | ⭐⭐⭐ 中等 | ❌ | ✅ | ~15MB（中文包） | Apache 2.0 | 老牌 OCR 引擎，中文需要额外语言包；对字体和排版要求高 |
 | **Windows OCR API** | ⭐⭐⭐ 中等 | ⭐⭐⭐⭐ 快 | ✅（系统级） | ✅ | 0（系统内置） | 系统 API | Windows 10+ 内置 OCR（windows-ocr 库），无需额外模型；但对竖排/艺术字支持差 |
@@ -141,21 +141,24 @@ OCR 是核心识别环节，最关键指标是**中文识别准确率**。原神
 - EasyOCR / TrOCR：模型体积大，首次加载慢（3-10s），推理也较慢
 
 **部署复杂度**
-- RapidOCR：`pip install rapidocr-onnxruntime`，无需额外框架，最轻便
+- RapidOCR：`uv add --optional ocr-rapid rapidocr onnxruntime`，拆分为 `rapidocr` 核心库 + 独立的 `onnxruntime` 推理引擎，无需 PaddlePaddle 框架，最轻便
 - PaddleOCR：需要安装 PaddlePaddle（CPU 版约 150MB），whl 包较大
 - Tesseract：需要单独安装 Tesseract OCR 引擎（Windows 安装包约 40MB）
 
-### 2.2 MVP 推荐：PaddleOCR（首选） / RapidOCR（备选）
+### 2.2 MVP 推荐：RapidOCR（默认） / PaddleOCR（备选）
 
-**PaddleOCR 推荐理由**：
+**RapidOCR 作为默认引擎**：
+1. **部署最轻便**：解耦的 `rapidocr` + 独立 `onnxruntime`，无需捆绑 PaddlePaddle 框架，冷启动更快
+2. **推理速度快**：ONNX Runtime 推理，中文识别准确率高，满足实时朗读场景
+3. **打包友好**：最终打包成 `.exe` 时体积更小（对比 PaddlePaddle ~300MB+）
+
+**PaddleOCR 作为备选**：
 1. **中文识别王者**：百度在海量中文数据上训练的模型，针对各种中文字体泛化能力极强
 2. **精准的位置检测**：DB 文本检测 + CRNN 识别，可精确定位对话区域文字位置
 3. **丰富的预处理工具**：内置图像方向分类、文字方向检测等功能
 4. **完善的文档和社区**：官方文档详尽，GitHub 30k+ Stars
 
-**RapidOCR 作为备选**：
-- 当最终打包成 `.exe` 时，PaddlePaddle 框架体积较大（~300MB+），RapidOCR 更轻量
-- 如果 MVP 阶段不需要 PaddleOCR 的高级特性，可以直接选用 RapidOCR
+当对中文特殊字体（楷体/宋体）识别要求极高时，可通过 `--ocr paddle` 切换到 PaddleOCR。
 
 ### 2.3 接口抽象
 

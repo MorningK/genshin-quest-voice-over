@@ -1,2 +1,70 @@
 # genshin-quest-voice-over
-Provide voice over service for Genshin Impact Quests
+
+为《原神》中没有配音的任务（主要是世界任务）提供实时的对话文本朗读服务。
+
+工具通过屏幕捕获识别游戏内对话字幕，经 OCR 提取文本后用 TTS 合成语音并播放，全程不修改游戏客户端。
+
+## 功能流程
+
+```
+游戏运行 → 屏幕捕获（2-4 FPS）→ OCR 文本识别 → 文本去重/变化检测
+    → TTS 语音合成 → 音频播放（winsound）
+```
+
+## 环境准备
+
+使用 [uv](https://docs.astral.sh/uv/) 管理 Python 依赖：
+
+```bash
+uv sync
+```
+
+核心运行仅依赖 `numpy`，各后端库按需通过可选依赖组安装：
+
+| 模块 | 可选依赖组 | 安装命令 |
+|------|-----------|---------|
+| 屏幕捕获（DXCam + MSS） | `capture` | `uv add --optional capture dxcam mss` |
+| OCR（RapidOCR 默认） | `ocr-rapid` | `uv add --optional ocr-rapid rapidocr onnxruntime` |
+| OCR（PaddleOCR 备选） | `ocr` | `uv add --optional ocr paddleocr paddlepaddle` |
+| TTS（Edge TTS 在线） | `tts-online` | `uv add --optional tts-online edge-tts` |
+| 播放（mp3 解码） | `playback` | `uv add --optional playback miniaudio` |
+
+后端依赖未安装时，应用会给出对应的安装提示并自动尝试降级到备选后端。
+> 注意：Edge TTS 输出 MP3，需安装 `playback` 组（miniaudio）才能用 winsound 播放；未安装时应用会跳过播放。
+
+## 运行
+
+```bash
+uv run python main.py
+```
+
+常用参数（完整参数见 `uv run python main.py --help`）：
+
+```bash
+# 指定捕获区域（left,top,right,bottom）并降低帧率
+uv run python main.py --region 100,200,900,600 --fps 3
+
+# 使用备选后端
+uv run python main.py --capture mss --ocr paddle --tts edge
+
+# 指定 OCR 语言与 TTS 音色
+uv run python main.py --language ch --voice zh-CN-XiaoxiaoNeural
+```
+
+按 `Ctrl+C` 优雅停止并释放资源。
+
+## 代码结构
+
+```
+main.py                      # 应用入口：CLI 参数解析 + VoiceOverApp 驱动
+src/
+├── common.py                # 共享数据类型（Point/Region）
+├── app/                     # 应用编排
+│   ├── config.py            # 运行配置与 CLI 解析
+│   ├── pipeline.py          # VoiceOverApp 主流程
+│   ├── textproc.py          # 文本清洗/去重/变化检测
+│   └── player.py            # 音频播放（winsound）
+├── capture/                 # 屏幕捕获（DXCam/MSS）
+├── recognition/             # OCR 识别（PaddleOCR/RapidOCR）
+└── tts/                     # TTS 合成（Edge TTS/VITS）
+```

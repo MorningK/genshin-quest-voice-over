@@ -8,6 +8,32 @@ dependencies = [
     "numpy>=2.5.1",
 ]
 
+[project.optional-dependencies]
+# 屏幕捕获后端
+capture = [
+    "dxcam>=0.0.6",
+    "mss>=9.0.1",
+]
+# OCR 首选：PaddleOCR
+ocr = [
+    "paddleocr>=3.0.0",
+    "paddlepaddle>=3.0.0",
+]
+# OCR 备选：RapidOCR（ONNX 轻量版）
+ocr-rapid = [
+    "onnxruntime>=1.28.0",
+    "rapidocr>=3.9.2",
+]
+# TTS 在线默认：Edge TTS
+tts-online = [
+    "edge-tts>=6.1.0",
+]
+# TTS 离线备选：VITS（仅骨架，需额外模型与推理依赖）
+tts-offline = []
+playback = [
+    "miniaudio>=1.71",
+]
+
 [dependency-groups]
 dev = [
     "pre-commit>=4.6.0",
