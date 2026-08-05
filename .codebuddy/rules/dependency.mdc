@@ -1,0 +1,69 @@
+---
+description:
+alwaysApply: true
+enabled: true
+updatedAt: 2026-05-27T03:19:58.809Z
+provider:
+---
+
+# 依赖管理规则
+
+## 依赖管理工具
+
+本项目使用 **uv** 作为 Python 依赖管理工具。
+
+- `pyproject.toml` — 项目元数据和依赖声明文件
+- `.python-version` — 指定项目使用的 Python 版本
+- `uv.lock` — 自动生成的依赖锁文件，确保环境一致性
+
+## uv 简单使用说明
+
+### 添加依赖
+
+```bash
+uv add <package-name>                # 添加运行时依赖
+uv add --dev <package-name>          # 添加开发依赖
+uv add --optional <group> <package>  # 添加可选依赖组
+```
+
+### 移除依赖
+
+```bash
+uv remove <package-name>
+```
+
+### 同步/安装依赖
+
+```bash
+uv sync                             # 根据 uv.lock 安装所有依赖
+uv sync --no-dev                    # 仅安装运行时依赖，跳过开发依赖
+```
+
+### 运行脚本
+
+```bash
+uv run python main.py               # 在项目虚拟环境中运行脚本
+uv run <command>                    # 运行任意命令
+```
+
+### 更新依赖
+
+```bash
+uv lock --upgrade                   # 更新所有依赖到最新兼容版本
+uv lock --upgrade-package <name>    # 仅更新指定包
+```
+
+### 其他常用命令
+
+```bash
+uv python list                      # 列出可用的 Python 版本
+uv python install 3.12              # 安装指定 Python 版本
+uv tree                             # 查看依赖树
+uv pip list                         # 列出已安装的包
+```
+
+## 注意事项
+
+- 添加依赖时使用 `uv add`，不要手动编辑 `pyproject.toml` 中的 dependencies
+- 所有依赖变更后会自动更新 `uv.lock`，该文件需要提交到 Git
+- 克隆项目后首次运行 `uv sync` 即可搭建完整的开发环境
