@@ -15,7 +15,13 @@ if TYPE_CHECKING:
     import numpy as np
 
 from src.common import Point
-from src.recognition.base import RecognitionBox, RecognitionConfig, RecognitionResult, TextRecognizer
+from src.recognition.base import (
+    RecognitionBox,
+    RecognitionConfig,
+    RecognitionResult,
+    TextRecognizer,
+    sort_boxes_reading_order,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +115,6 @@ class RapidOCREngine(TextRecognizer):
             raise RuntimeError("Failed to recognize text with RapidOCR.") from exc
 
         boxes: list[RecognitionBox] = []
-        texts: list[str] = []
         confidences: list[float] = []
 
         # result 为 RapidOCROutput，字段可能为 None（无识别结果）
@@ -137,17 +142,18 @@ class RapidOCREngine(TextRecognizer):
             # box 形如 [[x1,y1],[x2,y2],[x3,y3],[x4,y4]]
             points = [Point(int(p[0]), int(p[1])) for p in box]
 
-            texts.append(str(text))
             confidences.append(float(confidence))
             boxes.append(RecognitionBox(points=points, text=str(text), confidence=float(confidence)))
 
+        # 按坐标区域依"从左到右、从上到下"的阅读顺序重排，再拼接完整文本
+        ordered_boxes = sort_boxes_reading_order(boxes)
         avg_confidence = sum(confidences) / len(confidences) if confidences else 0.0
-        full_text = "".join(texts)
+        full_text = "".join(b.text for b in ordered_boxes)
 
         return RecognitionResult(
             text=full_text,
             confidence=avg_confidence,
-            boxes=boxes,
+            boxes=ordered_boxes,
             timestamp=time.time(),
             language_detected=self._config.language,
         )

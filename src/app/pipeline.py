@@ -284,12 +284,12 @@ class VoiceOverApp:
         logger.debug("Capture result: %s", result)
         recognition = self._recognizer.recognize(result.image)
         logger.debug("Recognition result: %s", recognition)
-        text = self._tracker.should_play(recognition.text)
-        if text is None:
+        request = self._tracker.should_play(recognition.text)
+        if request is None:
             logger.debug("No new dialogue, skip.")
             return
 
-        logger.info("New dialogue: %s", text)
-        tts_result = self._tts.synthesize(text)
+        logger.info("New dialogue [%s]: %s", request.kind, request.text)
+        tts_result = self._tts.synthesize(request.text)
         logger.debug("TTS result: %s", tts_result)
         self._player.play(tts_result)
