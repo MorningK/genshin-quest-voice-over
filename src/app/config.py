@@ -8,8 +8,9 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 
+from src.app.region_selector import select_region
 from src.capture import CaptureConfig
-from src.common import Region
+from src.common import Region, SelectedRegion
 from src.recognition import RecognitionConfig
 from src.tts import TTSConfig
 
@@ -26,7 +27,8 @@ class AppConfig:
         capture_backend: 屏幕捕获后端标识，可选 "dxcam" / "mss"。
         ocr_backend: OCR 后端标识，可选 "paddle" / "rapid"。
         tts_backend: TTS 后端标识，可选 "edge" / "vits"。
-        region: 捕获区域，None 表示全屏。
+        region: 捕获区域，None 表示全屏。坐标为相对 monitor_index 显示器的物理像素。
+        monitor_index: 目标显示器索引，0 为主屏。仅与 region 同时生效。
         fps: 目标帧率。
         language: OCR 识别语言。
         voice: TTS 音色。
@@ -37,6 +39,7 @@ class AppConfig:
     ocr_backend: str = "rapid"
     tts_backend: str = "edge"
     region: Region | None = None
+    monitor_index: int = 0
     fps: int = DEFAULT_FPS
     language: str = DEFAULT_LANGUAGE
     voice: str = DEFAULT_VOICE
@@ -46,9 +49,9 @@ class AppConfig:
         """转换为屏幕捕获配置。
 
         Returns:
-            CaptureConfig 对象，帧率由 AppConfig.fps 决定。
+            CaptureConfig 对象，包含捕获区域与目标显示器索引。
         """
-        return CaptureConfig(region=self.region, fps=self.fps)
+        return CaptureConfig(region=self.region, monitor_index=self.monitor_index, fps=self.fps)
 
     def to_recognition_config(self) -> RecognitionConfig:
         """转换为 OCR 识别配置。
@@ -119,6 +122,11 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="LEFT,TOP,RIGHT,BOTTOM",
         help="捕获区域（默认全屏）",
     )
+    parser.add_argument(
+        "--select-region",
+        action="store_true",
+        help="通过鼠标拖拽框选捕获区域（与 --region 互斥）",
+    )
     parser.add_argument("--fps", type=int, default=DEFAULT_FPS, help=f"目标帧率（默认 {DEFAULT_FPS}）")
     parser.add_argument("--language", default=DEFAULT_LANGUAGE, help=f"OCR 识别语言（默认 {DEFAULT_LANGUAGE}）")
     parser.add_argument("--voice", default=DEFAULT_VOICE, help=f"TTS 音色（默认 {DEFAULT_VOICE}）")
@@ -143,11 +151,24 @@ def parse_args(argv: list[str] | None = None) -> AppConfig:
     args = parser.parse_args(argv)
     if args.fps <= 0:
         parser.error("--fps must be a positive integer.")
+    if args.select_region and args.region is not None:
+        parser.error("--region and --select-region are mutually exclusive.")
+
+    region: Region | None = args.region
+    monitor_index = 0
+    if args.select_region:
+        # 交互式框选捕获区域；用户取消（返回 None）时回退为全屏捕获
+        selected = select_region()
+        if isinstance(selected, SelectedRegion):
+            region = selected.region
+            monitor_index = selected.monitor_index
+
     return AppConfig(
         capture_backend=args.capture,
         ocr_backend=args.ocr,
         tts_backend=args.tts,
-        region=args.region,
+        region=region,
+        monitor_index=monitor_index,
         fps=args.fps,
         language=args.language,
         voice=args.voice,

@@ -1,0 +1,275 @@
+"""交互式屏幕区域框选模块（支持多显示器）。
+
+基于 Python 标准库 tkinter 实现全屏半透明遮罩与鼠标拖拽框选。
+在扩展屏幕（多显示器）环境下，为每块显示器各创建一个全屏遮罩窗口，
+用户可在任意屏幕上拖拽框选捕获区域，程序自动识别框选所在显示器，
+并把坐标转换为相对该显示器的物理像素坐标返回。
+
+对外仅暴露纯函数 :func:`select_region`。
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import TYPE_CHECKING
+
+from src.app.monitor import _MonitorInfo, enumerate_monitors, locate_region
+from src.common import Point, Region, SelectedRegion
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from typing import Any
+
+logger = logging.getLogger(__name__)
+
+# 引导提示文案
+_HELP_TEXT = "按住鼠标左键拖拽框选捕获区域，松开确认；按 Esc 取消"
+_SELECTION_COLOR = "#00ff00"  # 选中矩形高亮颜色
+
+
+class _Overlay:
+    """单个显示器的全屏遮罩窗口。
+
+    持有该显示器对应的 Toplevel、Canvas 及其全局逻辑原点（窗口左上角
+    在虚拟桌面中的全局坐标），用于在画布上以全局坐标系绘制选中矩形。
+    """
+
+    def __init__(self, top_level: Any, canvas: Any, origin: Point) -> None:
+        """初始化遮罩。
+
+        Args:
+            top_level: tkinter Toplevel 窗口。
+            canvas: 遮罩内的 Canvas 画布。
+            origin: 该显示器逻辑区域左上角在虚拟桌面中的全局坐标。
+        """
+        self.top_level = top_level
+        self.canvas = canvas
+        self.origin = origin
+        self.rect_id: str | None = None
+
+
+class _RegionSelector:
+    """tkinter 多显示器全屏框选选择器内部实现。
+
+    负责为每块显示器创建全屏遮罩窗口、处理鼠标拖拽与键盘事件，
+    以全局逻辑坐标记录框选范围，最终转换为 SelectedRegion 回调返回。
+    """
+
+    def __init__(self, root: Any, on_done: Callable[[SelectedRegion | None], None]) -> None:
+        """初始化选择器。
+
+        Args:
+            root: tkinter 根窗口（Tk 实例）。
+            on_done: 框选结束或取消时的回调，参数为结果 SelectedRegion 或 None。
+        """
+        import tkinter as tk
+
+        self._tk = tk
+        self._root = root
+        self._on_done = on_done
+        self._overlays: list[_Overlay] = []
+        self._start_global: Point | None = None
+        self._current_global: Point | None = None
+
+    def run(self) -> None:
+        """为每块显示器创建全屏遮罩并绑定事件，随后由外部调用 mainloop。"""
+        try:
+            monitors = enumerate_monitors()
+        except RuntimeError as exc:
+            logger.warning("Monitor enumeration failed, selection disabled: %s", exc)
+            self._on_done(None)
+            return
+
+        for info in monitors:
+            overlay = self._create_overlay(info)
+            if overlay is not None:
+                self._overlays.append(overlay)
+
+        if not self._overlays:
+            self._on_done(None)
+
+    def _create_overlay(self, info: _MonitorInfo) -> _Overlay | None:
+        """为单块显示器创建全屏遮罩窗口。
+
+        Args:
+            info: 显示器几何信息。
+
+        Returns:
+            _Overlay 实例；创建失败时返回 None。
+        """
+        logical = info.logical
+        width = logical.width
+        height = logical.height
+        origin = Point(x=logical.left, y=logical.top)
+
+        overlay = self._tk.Toplevel(self._root)
+        overlay.overrideredirect(True)
+        overlay.attributes("-topmost", True)
+        # 用全局逻辑坐标定位窗口：WxH+X+Y
+        overlay.geometry(f"{width}x{height}+{logical.left}+{logical.top}")
+        overlay.configure(bg="black", cursor="crosshair")
+        overlay.attributes("-alpha", 0.35)
+
+        canvas = self._tk.Canvas(overlay, width=width, height=height, bg="black", highlightthickness=0)
+        canvas.pack(fill="both", expand=True)
+        canvas.create_text(
+            width // 2,
+            height // 2,
+            text=_HELP_TEXT,
+            fill="white",
+            font=("Microsoft YaHei", 14),
+        )
+
+        canvas.bind("<ButtonPress-1>", self._on_press)
+        canvas.bind("<B1-Motion>", self._on_drag)
+        canvas.bind("<ButtonRelease-1>", self._on_release)
+        overlay.bind("<Escape>", self._on_escape)
+        overlay.focus_set()
+
+        return _Overlay(top_level=overlay, canvas=canvas, origin=origin)
+
+    @staticmethod
+    def _normalize(start: Point, end: Point) -> Region:
+        """将全局起止坐标归一化为合法矩形区域。
+
+        拖拽方向可能使 right<left 或 bottom<top，统一取 min/max。
+
+        Args:
+            start: 按下时的全局起始点。
+            end: 松开时的全局结束点。
+
+        Returns:
+            归一化后的全局逻辑区域。
+        """
+        return Region(
+            left=min(start.x, end.x),
+            right=max(start.x, end.x),
+            top=min(start.y, end.y),
+            bottom=max(start.y, end.y),
+        )
+
+    def _on_press(self, event: Any) -> None:
+        """鼠标按下：记录全局起始点。"""
+        self._start_global = Point(x=event.x_root, y=event.y_root)
+        self._current_global = self._start_global
+        self._redraw_all()
+
+    def _on_drag(self, event: Any) -> None:
+        """鼠标拖拽：更新全局结束点并重绘所有遮罩矩形。"""
+        self._current_global = Point(x=event.x_root, y=event.y_root)
+        self._redraw_all()
+
+    def _redraw_all(self) -> None:
+        """在所有显示器画布上重绘选中矩形（全局坐标系）。"""
+        if self._start_global is None or self._current_global is None:
+            return
+        region = self._normalize(self._start_global, self._current_global)
+        for ov in self._overlays:
+            if ov.rect_id is not None:
+                ov.canvas.delete(ov.rect_id)
+            # 将全局区域转换到该画布的局部坐标
+            left = region.left - ov.origin.x
+            top = region.top - ov.origin.y
+            right = region.right - ov.origin.x
+            bottom = region.bottom - ov.origin.y
+            ov.rect_id = ov.canvas.create_rectangle(
+                left,
+                top,
+                right,
+                bottom,
+                outline=_SELECTION_COLOR,
+                width=2,
+                dash=(4, 2),
+            )
+
+    def _on_release(self, event: Any) -> None:
+        """鼠标松开：确认框选结果并结束。"""
+        if self._start_global is None:
+            return
+        end = Point(x=event.x_root, y=event.y_root)
+        region = self._normalize(self._start_global, end)
+        # 仅点击未拖拽产生零尺寸区域，视为取消
+        if region.width == 0 or region.height == 0:
+            self._finish(None)
+            return
+        try:
+            selected = locate_region(region)
+        except RuntimeError as exc:
+            logger.warning("Region localization failed, cancel: %s", exc)
+            self._finish(None)
+            return
+        self._finish(selected)
+
+    def _on_escape(self, _event: Any) -> None:
+        """按下 Esc：取消框选。"""
+        self._finish(None)
+
+    def _finish(self, result: SelectedRegion | None) -> None:
+        """结束框选：销毁所有遮罩并触发回调。
+
+        Args:
+            result: 框选结果，None 表示取消。
+        """
+        try:
+            for ov in self._overlays:
+                try:
+                    ov.top_level.destroy()
+                except Exception:  # noqa: BLE001 - 单窗口销毁失败不中断整体清理
+                    logger.exception("Failed to destroy overlay window.")
+        finally:
+            self._overlays.clear()
+            self._on_done(result)
+
+
+def select_region() -> SelectedRegion | None:
+    """弹出覆盖所有显示器的全屏遮罩，让用户鼠标拖拽框选捕获区域。
+
+    阻塞直至用户完成框选或取消。结果坐标已转换为目标显示器的相对物理像素。
+
+    Returns:
+        SelectedRegion 表示选中的区域与显示器索引；用户按 Esc 或发生异常时返回 None。
+
+    Raises:
+        RuntimeError: 当前环境无法初始化 tkinter 时抛出。
+    """
+    try:
+        import tkinter as tk
+    except ImportError as exc:
+        raise RuntimeError(
+            "tkinter is not available. Please use --region to specify capture coordinates manually."
+        ) from exc
+
+    result: SelectedRegion | None = None
+    root: Any | None = None
+
+    def _set_result(r: SelectedRegion | None) -> None:
+        nonlocal result
+        result = r
+        if root is not None:
+            root.quit()
+
+    try:
+        root = tk.Tk()
+        root.withdraw()  # 隐藏主窗口，仅显示框选遮罩
+        selector = _RegionSelector(root, _set_result)
+        selector.run()
+        root.mainloop()
+    except Exception as exc:  # noqa: BLE001 - 初始化或框选异常不应中断应用，回退全屏
+        logger.exception("Region selection failed, fall back to full screen: %s", exc)
+        result = None
+    finally:
+        if root is not None:
+            try:
+                root.destroy()
+            except Exception:  # noqa: BLE001 - 资源释放阶段异常不应向上传播
+                logger.exception("Failed to destroy tkinter root.")
+
+    if result is not None:
+        logger.info(
+            "Selected monitor %d, region %s",
+            result.monitor_index,
+            result.region,
+        )
+    else:
+        logger.info("Region selection cancelled, using full screen.")
+    return result

@@ -63,10 +63,13 @@ class MSSCapture(ScreenCapture):
                 raise RuntimeError(f"Monitor index {config.monitor_index} is out of range.")
             self._monitor = monitors[index]
         else:
+            # 区域模式：region 为相对 monitor_index 显示器的物理坐标，
+            # MSS 需要的是绝对屏幕坐标，须加上该显示器的物理原点偏移。
             region = config.region
+            base = self._sct.monitors[config.monitor_index + 1]
             self._monitor = {
-                "left": region.left,
-                "top": region.top,
+                "left": base["left"] + region.left,
+                "top": base["top"] + region.top,
                 "width": region.width,
                 "height": region.height,
             }
@@ -92,8 +95,8 @@ class MSSCapture(ScreenCapture):
         except Exception as exc:
             raise RuntimeError("Failed to grab frame from MSS.") from exc
 
-        # MSS 返回 BGRA，转换为 numpy 数组并提取 BGR
-        frame = np.asarray(shot.bgra)
+        # MSS 返回 BGRA bytes，转换为 numpy 数组并提取 BGR
+        frame = np.frombuffer(shot.bgra, dtype=np.uint8).reshape(shot.height, shot.width, 4)
         image = frame[:, :, :3].copy()
 
         if self._config is not None and self._config.region is not None:
