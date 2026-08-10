@@ -97,7 +97,9 @@ class TextTracker:
         if cleaned == self._last_text:
             return None
 
-        if cleaned.startswith(self._last_text):
+        # 首帧时 _last_text 为空字符串，startswith("") 恒为 True；
+        # 因此仅在非空累积状态下才走前缀增量分支
+        if self._last_text and cleaned.startswith(self._last_text):
             delta = cleaned[len(self._last_text) :]
             if not delta or is_noise(delta):
                 # 增量部分为空或仅为符号/空白，无需补播
@@ -105,8 +107,8 @@ class TextTracker:
             self._last_text = cleaned
             return PlayRequest(text=delta, kind="delta")
 
-        # 与上一句高度相似（仅 OCR 帧间轻微抖动导致个别字漏识/多字/空格），
-        # 视为同一句对话，不触发播放；用最新识别文本覆盖累积状态保证后续判定准确
+        # 与上一句高度相似（仅 OCR 帧间轻微抖动导致个别字漏识/多字/空格），视为同一句对话，不触发播放；
+        # 需要有更好的办法来解决在抖动结果上追加文字时因状态漂移而重复播放整句的问题
         if SequenceMatcher(None, self._last_text, cleaned).ratio() >= _SIMILARITY_THRESHOLD:
             return None
 

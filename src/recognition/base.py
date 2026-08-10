@@ -238,11 +238,13 @@ def _order_coord_boxes(coord_boxes: list[RecognitionBox]) -> list[RecognitionBox
     while remaining:
         seed = remaining.pop(0)
         line = [seed]
-        # 收集与该行任一区域同行的区域；seed 已在 line 中，直接与其比较即可
+        # 只与 seed（该行的稳定代表）比较同行，而非与行内任一成员比较；
+        # 垂直重叠不具传递性，若与行内任意成员比较，一个高 box 可能同时
+        # 桥接两行，把本应分开的多行错误地合并成一行
         i = 0
         while i < len(remaining):
             box = remaining[i]
-            if any(_same_line(box, other) for other in line):
+            if _same_line(box, seed):
                 line.append(box)
                 remaining.pop(i)
             else:
