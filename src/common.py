@@ -54,3 +54,24 @@ class Region:
     def height(self) -> int:
         """区域高度（像素）。"""
         return self.bottom - self.top
+
+
+@dataclass
+class SelectedRegion:
+    """框选得到的捕获区域及目标显示器索引。
+
+    用于表达交互式框选的结果：既包含相对目标显示器左上角的物理像素区域，
+    也记录该显示器在捕获后端（DXCam/MSS）中的索引（0=主屏）。
+
+    Attributes:
+        region: 相对所选显示器左上角的物理像素区域。
+        monitor_index: 目标显示器索引，0 为主显示器。
+    """
+
+    region: Region
+    monitor_index: int = 0
+
+    def __post_init__(self) -> None:
+        """构造后校验显示器索引非负。"""
+        if self.monitor_index < 0:
+            raise ValueError("monitor_index must be >= 0")
