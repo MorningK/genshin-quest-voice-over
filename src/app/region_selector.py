@@ -188,6 +188,10 @@ class _RegionSelector:
             return
         end = Point(x=event.x_root, y=event.y_root)
         region = self._normalize(self._start_global, end)
+        # 仅点击未拖拽产生零尺寸区域，视为取消
+        if region.width == 0 or region.height == 0:
+            self._finish(None)
+            return
         try:
             selected = locate_region(region)
         except RuntimeError as exc:
@@ -236,26 +240,29 @@ def select_region() -> SelectedRegion | None:
         ) from exc
 
     result: SelectedRegion | None = None
-    root = tk.Tk()
-    root.withdraw()  # 隐藏主窗口，仅显示框选遮罩
+    root: Any | None = None
 
     def _set_result(r: SelectedRegion | None) -> None:
         nonlocal result
         result = r
-        root.quit()
+        if root is not None:
+            root.quit()
 
     try:
+        root = tk.Tk()
+        root.withdraw()  # 隐藏主窗口，仅显示框选遮罩
         selector = _RegionSelector(root, _set_result)
         selector.run()
         root.mainloop()
-    except Exception as exc:  # noqa: BLE001 - 框选异常不应中断应用，回退全屏
+    except Exception as exc:  # noqa: BLE001 - 初始化或框选异常不应中断应用，回退全屏
         logger.exception("Region selection failed, fall back to full screen: %s", exc)
         result = None
     finally:
-        try:
-            root.destroy()
-        except Exception:  # noqa: BLE001 - 资源释放阶段异常不应向上传播
-            logger.exception("Failed to destroy tkinter root.")
+        if root is not None:
+            try:
+                root.destroy()
+            except Exception:  # noqa: BLE001 - 资源释放阶段异常不应向上传播
+                logger.exception("Failed to destroy tkinter root.")
 
     if result is not None:
         logger.info(

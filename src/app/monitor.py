@@ -203,7 +203,8 @@ def locate_region(global_region: Region, monitors: Sequence[_MonitorInfo] | None
         SelectedRegion，包含相对所选显示器左上角的物理 Region 与显示器索引。
 
     Raises:
-        RuntimeError: 枚举显示器失败时抛出。
+        RuntimeError: 枚举显示器失败，或区域跨越多个显示器（无法用
+            单显示器相对坐标表达）时抛出。
     """
     if monitors is None:
         monitors = enumerate_monitors()
@@ -212,7 +213,16 @@ def locate_region(global_region: Region, monitors: Sequence[_MonitorInfo] | None
     center_y = (global_region.top + global_region.bottom) // 2
     target = _find_monitor(monitors, center_x, center_y)
 
+    # SelectedRegion 契约仅支持单显示器相对区域；区域跨越显示器边界时
+    # 各边界可能属于不同缩放的显示器，强行转换会得到错误物理坐标，故拒绝。
     logical_origin = target.logical
+    if (
+        global_region.left < logical_origin.left
+        or global_region.top < logical_origin.top
+        or global_region.right > logical_origin.right
+        or global_region.bottom > logical_origin.bottom
+    ):
+        raise RuntimeError("Selected region spans multiple monitors, selection rejected.")
     rel = Region(
         left=_round((global_region.left - logical_origin.left) * target.scale),
         top=_round((global_region.top - logical_origin.top) * target.scale),
