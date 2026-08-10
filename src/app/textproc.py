@@ -8,12 +8,16 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 
 # 需要过滤的无意义字符集合：空白、常见的 UI 占位符号等
 _NOISE_RE = re.compile(r"[\s\u3000·•▪▸►◉○●\-—_]{1,}")
 
 # 常见英文/数字字母，用于判断是否为纯符号文本
 _ALNUM_RE = re.compile(r"[a-zA-Z0-9\u4e00-\u9fff]")
+
+# 判定新文本与上一句累积文本为同一句的相似度阈值
+_SIMILARITY_THRESHOLD = 0.9
 
 
 def clean_text(text: str) -> str:
@@ -77,6 +81,7 @@ class TextTracker:
         - 清洗后为空或为噪音则返回 None；
         - 与已播放累积文本完全一致（未变化）则返回 None；
         - 以累积文本为前缀且更长（文字陆续追加）则返回增量后缀的 delta 请求；
+        - 与累积文本高度相似（相似度不低于阈值，如 OCR 帧间轻微抖动）则视为同一句，更新累积文本并返回 None；
         - 其余情况返回完整文本的 full 请求。
 
         Args:
@@ -99,6 +104,11 @@ class TextTracker:
                 return None
             self._last_text = cleaned
             return PlayRequest(text=delta, kind="delta")
+
+        # 与上一句高度相似（仅 OCR 帧间轻微抖动导致个别字漏识/多字/空格），
+        # 视为同一句对话，不触发播放；用最新识别文本覆盖累积状态保证后续判定准确
+        if SequenceMatcher(None, self._last_text, cleaned).ratio() >= _SIMILARITY_THRESHOLD:
+            return None
 
         self._last_text = cleaned
         return PlayRequest(text=cleaned, kind="full")
