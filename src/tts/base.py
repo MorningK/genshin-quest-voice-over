@@ -147,6 +147,15 @@ class TextToSpeech(ABC):
         ...
 
     @property
+    def supports_streaming(self) -> bool:
+        """当前引擎是否支持流式合成（synthesize_stream）。
+
+        默认返回 False，支持流式的引擎（如 Edge TTS）可覆写为 True。
+        pipeline 据此决定是否走低延迟的流式合成+流式播放路径。
+        """
+        return False
+
+    @property
     @abstractmethod
     def available_voices(self) -> list[str]:
         """返回当前引擎支持的音色列表。"""

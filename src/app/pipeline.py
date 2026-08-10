@@ -11,7 +11,7 @@ import threading
 import time
 from typing import TYPE_CHECKING, Any
 
-from src.app.player import WinsoundPlayer
+from src.app.player import MiniAudioPlayer, WinsoundPlayer
 from src.app.textproc import TextTracker
 
 if TYPE_CHECKING:
@@ -242,8 +242,15 @@ class VoiceOverApp:
                 _TTS_INSTALL_HINT,
                 "TTS",
             )
-            player = WinsoundPlayer()
-            player.initialize()
+            # 优先初始化基于 miniaudio 的流式播放器（支持边合成边播放），
+            # 依赖缺失时降级到 winsound 阻塞播放。
+            try:
+                player = MiniAudioPlayer()
+                player.initialize()
+            except RuntimeError as exc:
+                logger.warning("MiniAudio player unavailable, fallback to winsound: %s", exc)
+                player = WinsoundPlayer()
+                player.initialize()
             self._player = player
         except KeyboardInterrupt:
             raise
@@ -290,6 +297,17 @@ class VoiceOverApp:
             return
 
         logger.info("New dialogue [%s]: %s", request.kind, request.text)
+
+        # 优先流式：TTS 与播放器均支持流式时，边合成边播放以降低感知延迟
+        if self._tts.supports_streaming and self._player.supports_streaming:
+            try:
+                chunks = self._tts.synthesize_stream(request.text)
+                self._player.play_stream(chunks)
+                return
+            except (RuntimeError, ValueError) as exc:
+                logger.warning("Streaming playback failed, fallback to one-shot: %s", exc)
+
+        # 降级：一次性合成 + 阻塞播放
         tts_result = self._tts.synthesize(request.text)
         logger.debug("TTS result: %s", tts_result)
         self._player.play(tts_result)
