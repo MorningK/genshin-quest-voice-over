@@ -16,7 +16,13 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
 from src.common import Point
-from src.recognition.base import RecognitionBox, RecognitionConfig, RecognitionResult, TextRecognizer
+from src.recognition.base import (
+    RecognitionBox,
+    RecognitionConfig,
+    RecognitionResult,
+    TextRecognizer,
+    sort_boxes_reading_order,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +133,6 @@ class PaddleOCREngine(TextRecognizer):
             raise RuntimeError("Failed to recognize text with PaddleOCR.") from exc
 
         boxes: list[RecognitionBox] = []
-        texts: list[str] = []
         confidences: list[float] = []
 
         # PaddleOCR 3.x：predict 返回列表，取第一张图的结果。
@@ -154,17 +159,18 @@ class PaddleOCREngine(TextRecognizer):
             if confidence < self._config.confidence_threshold:
                 continue
 
-            texts.append(str(text))
             confidences.append(confidence)
             boxes.append(RecognitionBox(points=points, text=str(text), confidence=confidence))
 
+        # 按坐标区域依"从左到右、从上到下"的阅读顺序重排，再拼接完整文本
+        ordered_boxes = sort_boxes_reading_order(boxes)
         avg_confidence = sum(confidences) / len(confidences) if confidences else 0.0
-        full_text = "".join(texts)
+        full_text = "".join(b.text for b in ordered_boxes)
 
         return RecognitionResult(
             text=full_text,
             confidence=avg_confidence,
-            boxes=boxes,
+            boxes=ordered_boxes,
             timestamp=time.time(),
             language_detected=self._config.language,
         )

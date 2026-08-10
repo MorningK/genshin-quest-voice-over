@@ -6,7 +6,13 @@
 
 from src.common import Point
 from src.recognition.backends import PaddleOCREngine, RapidOCREngine
-from src.recognition.base import RecognitionBox, RecognitionConfig, RecognitionResult, TextRecognizer
+from src.recognition.base import (
+    RecognitionBox,
+    RecognitionConfig,
+    RecognitionResult,
+    TextRecognizer,
+    sort_boxes_reading_order,
+)
 
 __all__ = [
     "PaddleOCREngine",
@@ -16,4 +22,5 @@ __all__ = [
     "RecognitionConfig",
     "RecognitionResult",
     "TextRecognizer",
+    "sort_boxes_reading_order",
 ]
