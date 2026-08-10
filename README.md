@@ -48,6 +48,10 @@ uv run python main.py
 # 指定捕获区域（left,top,right,bottom）并降低帧率
 uv run python main.py --region 100,200,900,600 --fps 3
 
+# 交互式框选捕获区域（弹出全屏遮罩，鼠标拖拽框选，Esc 取消则回退全屏）
+# 注意：--select-region 与 --region 互斥，不可同时使用
+uv run python main.py --select-region --fps 3
+
 # 使用备选后端
 uv run python main.py --capture mss --ocr paddle --tts edge
 
@@ -69,6 +73,7 @@ src/
 ├── app/                     # 应用编排
 │   ├── config.py            # 运行配置与 CLI 解析
 │   ├── pipeline.py          # VoiceOverApp 主流程
+│   ├── region_selector.py   # 交互式屏幕区域框选（tkinter）
 │   ├── textproc.py          # 文本清洗/去重/变化检测
 │   └── player.py            # 音频播放（winsound）
 ├── capture/                 # 屏幕捕获（DXCam/MSS）

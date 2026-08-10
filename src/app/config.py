@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 
+from src.app.region_selector import select_region
 from src.capture import CaptureConfig
 from src.common import Region
 from src.recognition import RecognitionConfig
@@ -119,6 +120,11 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="LEFT,TOP,RIGHT,BOTTOM",
         help="捕获区域（默认全屏）",
     )
+    parser.add_argument(
+        "--select-region",
+        action="store_true",
+        help="通过鼠标拖拽框选捕获区域（与 --region 互斥）",
+    )
     parser.add_argument("--fps", type=int, default=DEFAULT_FPS, help=f"目标帧率（默认 {DEFAULT_FPS}）")
     parser.add_argument("--language", default=DEFAULT_LANGUAGE, help=f"OCR 识别语言（默认 {DEFAULT_LANGUAGE}）")
     parser.add_argument("--voice", default=DEFAULT_VOICE, help=f"TTS 音色（默认 {DEFAULT_VOICE}）")
@@ -143,11 +149,19 @@ def parse_args(argv: list[str] | None = None) -> AppConfig:
     args = parser.parse_args(argv)
     if args.fps <= 0:
         parser.error("--fps must be a positive integer.")
+    if args.select_region and args.region is not None:
+        parser.error("--region and --select-region are mutually exclusive.")
+
+    region = args.region
+    if args.select_region:
+        # 交互式框选捕获区域；用户取消（返回 None）时回退为全屏捕获
+        region = select_region()
+
     return AppConfig(
         capture_backend=args.capture,
         ocr_backend=args.ocr,
         tts_backend=args.tts,
-        region=args.region,
+        region=region,
         fps=args.fps,
         language=args.language,
         voice=args.voice,
