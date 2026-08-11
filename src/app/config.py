@@ -33,6 +33,7 @@ class AppConfig:
         language: OCR 识别语言。
         voice: TTS 音色。
         tts_model_path: 离线 TTS 模型路径，仅 tts_backend="vits" 时使用。
+        verbose: 是否输出 debug 级别日志。
     """
 
     capture_backend: str = "dxcam"
@@ -44,6 +45,7 @@ class AppConfig:
     language: str = DEFAULT_LANGUAGE
     voice: str = DEFAULT_VOICE
     tts_model_path: str | None = None
+    verbose: bool = False
 
     def to_capture_config(self) -> CaptureConfig:
         """转换为屏幕捕获配置。
@@ -128,6 +130,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="通过鼠标拖拽框选捕获区域（与 --region 互斥）",
     )
     parser.add_argument("--fps", type=int, default=DEFAULT_FPS, help=f"目标帧率（默认 {DEFAULT_FPS}）")
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="输出 debug 级别日志（含各步骤耗时明细）",
+    )
     parser.add_argument("--language", default=DEFAULT_LANGUAGE, help=f"OCR 识别语言（默认 {DEFAULT_LANGUAGE}）")
     parser.add_argument("--voice", default=DEFAULT_VOICE, help=f"TTS 音色（默认 {DEFAULT_VOICE}）")
     parser.add_argument(
@@ -173,4 +181,5 @@ def parse_args(argv: list[str] | None = None) -> AppConfig:
         language=args.language,
         voice=args.voice,
         tts_model_path=args.tts_model_path,
+        verbose=args.verbose,
     )

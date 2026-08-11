@@ -13,10 +13,14 @@ from src.app.config import parse_args
 from src.app.pipeline import VoiceOverApp
 
 
-def _setup_logging() -> None:
-    """配置控制台日志输出。"""
+def _setup_logging(verbose: bool = False) -> None:
+    """配置控制台日志输出。
+
+    Args:
+        verbose: 为 True 时输出 debug 级别日志，否则仅输出 info 及以上。
+    """
     logging.basicConfig(
-        level=logging.INFO,
+        level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
         datefmt="%H:%M:%S",
     )
@@ -31,10 +35,11 @@ def main(argv: list[str] | None = None) -> int:
     Returns:
         退出码，0 表示正常退出。
     """
-    _setup_logging()
     logger = logging.getLogger(__name__)
 
     config = parse_args(argv)
+    # 先解析参数再配置日志，避免 basicConfig 在已有 handler 时失效导致 verbose 不生效
+    _setup_logging(config.verbose)
     logger.info(
         "Starting voice-over app (capture=%s, ocr=%s, tts=%s, fps=%d).",
         config.capture_backend,
