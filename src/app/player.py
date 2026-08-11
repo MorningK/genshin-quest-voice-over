@@ -13,6 +13,7 @@ import os
 import queue
 import tempfile
 import threading
+import time
 import wave
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -255,6 +256,9 @@ class MiniAudioPlayer(AudioPlayer):
     _SILENCE_BRIDGE_SECONDS = 0.02
     #: done 等待的轮询间隔（秒），设备异常停止时用于超时退出，避免主循环挂死。
     _DONE_POLL_SECONDS = 0.5
+    #: 播放结束后排空缓冲队列、等待解码线程退出的总截止时间（秒）。
+    #: 超过该时限后放弃等待，防止解码线程异常时清理过程被无限阻塞。
+    _CLEANUP_TIMEOUT_SECONDS = 5.0
 
     def __init__(self, nchannels: int = 2, sample_rate: int = 44100) -> None:
         """初始化实例，尚未建立播放能力。
@@ -456,20 +460,24 @@ class MiniAudioPlayer(AudioPlayer):
                     pcm = pcm_queue.get(timeout=self._BUFFER_WAIT_TIMEOUT)
                     pcm_queue.task_done()
                 except queue.Empty:
-                    pcm = None
-                if pcm is None:
-                    # 阻塞等待超时仍未补充，输出静音桥接等待下次补充；
-                    # 若实际收到结束哨兵，则由内层循环取走并正常收尾。
+                    # 阻塞等待超时仍未补充，输出静音桥接等待下次补充。
                     # 静音长度与设备请求帧数精确对齐，避免回调欠载。
                     frames_required = yield b"\x00" * need
                     need = max(frames_required, 1) * framesize
                     continue
+                if pcm is None:
+                    # 解码已结束：播完剩余数据后收尾，避免结尾静音吞掉末尾音频。
+                    if pending:
+                        frames_required = yield pending
+                    done.set()
+                    return
                 if len(pcm) == 0:
                     continue
                 # 等待到真实数据：回到累积循环继续补充
                 pending += pcm
 
         generator = _feed(first)
+        playback_failed = False  # 标记播放阶段是否已抛出异常，供 finally 决定是否传播解码错误
         try:
             next(generator)  # 素数化生成器，满足 PlaybackDevice.start 的契约
             device.start(generator)
@@ -480,6 +488,8 @@ class MiniAudioPlayer(AudioPlayer):
                     break
         except Exception as exc:  # noqa: BLE001 - 播放失败不吞掉异常，交由调用方降级
             logger.warning("Failed to stream playback: %s", exc)
+            # 标记播放异常，避免 finally 中传播解码错误时替换此异常
+            playback_failed = True
             # 统一包装为 RuntimeError，保证 pipeline 的降级分支能捕获并转入一次性播放
             raise RuntimeError(f"Failed to stream playback: {exc}") from exc
         finally:
@@ -487,17 +497,23 @@ class MiniAudioPlayer(AudioPlayer):
                 device.stop()
             with contextlib.suppress(Exception):  # 关闭生成器异常可忽略，不替换原始异常
                 generator.close()
-            # 排空有界队列，解除解码线程在 put 上的阻塞，确保 worker 可退出、避免线程泄漏
-            while worker.is_alive():
+            # 排空有界队列，解除解码线程在 put 上的阻塞，确保 worker 可退出、避免线程泄漏。
+            # 用有限超时持续轮询：get_nowait 可能在 worker 进入下一次 put 前的空窗期遇到
+            # queue.Empty 而提前退出，导致 worker 重新填满队列后再次阻塞，故需反复排空直到
+            # worker 退出或到达清理截止时间。
+            deadline = time.monotonic() + self._CLEANUP_TIMEOUT_SECONDS
+            while worker.is_alive() and time.monotonic() < deadline:
                 try:
-                    pcm_queue.get_nowait()
+                    pcm_queue.get(timeout=0.1)
                     pcm_queue.task_done()
                 except queue.Empty:
-                    break
-            worker.join(timeout=5.0)
-            # 仅在正常播放完毕后传播解码线程错误，避免 GeneratorExit 期间替换异常
-            if decode_error:
+                    continue
+            worker.join(timeout=self._CLEANUP_TIMEOUT_SECONDS)
+            # 仅当未发生播放异常时才传播解码线程错误，避免替换 except 中已抛出的异常；
+            # 播放正常但解码失败时，包装后重新抛出，使 pipeline 能进入一次性降级分支。
+            if decode_error and not playback_failed:
                 logger.warning("Decode worker ended with error: %s", decode_error[0])
+                raise RuntimeError(f"Decode worker ended with error: {decode_error[0]}") from decode_error[0]
 
     def release(self) -> None:
         """释放播放器占用的资源。"""
