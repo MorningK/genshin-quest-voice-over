@@ -26,7 +26,8 @@
             ├── 无变化 → 丢弃
             └── 有变化 → 送入播放队列
                             → TTS 流式合成 → 流式播放（miniaudio，边合成边播放）
-                            └─ 流式不可用时降级：一次性合成 → 阻塞播放（winsound）
+                            └─ 流式不可用时降级：一次性合成 → 阻塞播放
+                               （Edge TTS 输出 MP3，未安装 playback 时非 WAV 音频跳过播放）
 ```
 
 ---
@@ -331,7 +332,7 @@ class TextToSpeech(ABC):
 │                                                         │
 │  CaptureResult → bytes → RecognitionResult → str → TTSResult 流/一次性 │
 │  .image              └─→ .recognize(image)      └─→ .synthesize_stream │
-│                                              /  .synthesize → .play_stream │
+│                                              /  .synthesize → .play │
 │                                                         │
 ├─────────────────────────────────────────────────────────┤
 │                    具体实现层（后续开发）                   │

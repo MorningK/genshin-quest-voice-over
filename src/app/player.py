@@ -253,6 +253,8 @@ class MiniAudioPlayer(AudioPlayer):
     _BUFFER_WAIT_TIMEOUT = 0.1
     #: 缓冲不足且等待超时后回退输出的静音时长（秒），用于平滑网络/解码尖峰。
     _SILENCE_BRIDGE_SECONDS = 0.02
+    #: done 等待的轮询间隔（秒），设备异常停止时用于超时退出，避免主循环挂死。
+    _DONE_POLL_SECONDS = 0.5
 
     def __init__(self, nchannels: int = 2, sample_rate: int = 44100) -> None:
         """初始化实例，尚未建立播放能力。
@@ -411,7 +413,7 @@ class MiniAudioPlayer(AudioPlayer):
             worker.join(timeout=5.0)
             return
 
-        def _feed() -> Generator[bytes, int, None]:
+        def _feed(initial: bytes) -> Generator[bytes, int, None]:
             """设备回调生成器：从缓冲队列累积整块已解码 PCM，按请求帧数切片播放。
 
             回调线程对实时性要求较高，此处优先**非阻塞**消费缓冲队列：
@@ -419,10 +421,13 @@ class MiniAudioPlayer(AudioPlayer):
             - 队列空但仍在解码 → 先短时阻塞等待解码线程补充，尽量复用真实音频避免爆音；
               等待超时仍未补充才输出少量静音桥接，避免回调无数据可返导致设备欠载；
             - 队列空且解码已结束 → 返回剩余数据后收尾。
+
+            Args:
+                initial: 预取的首个已解码 PCM 块，作为初始缓冲，避免句首被丢弃。
             """
             frames_required = yield b""  # 素数化占位
             need = max(frames_required, 1) * framesize
-            pending = b""
+            pending = initial
             while True:
                 # 连续非阻塞取队列累积，直到 pending 满足请求帧数，或队列暂时无数据。
                 while len(pending) < need:
@@ -453,10 +458,10 @@ class MiniAudioPlayer(AudioPlayer):
                 except queue.Empty:
                     pcm = None
                 if pcm is None:
-                    # 阻塞等待超时仍未补充，输出少量静音桥接等待下次补充；
+                    # 阻塞等待超时仍未补充，输出静音桥接等待下次补充；
                     # 若实际收到结束哨兵，则由内层循环取走并正常收尾。
-                    silence_bytes = int(self._sample_rate * self._SILENCE_BRIDGE_SECONDS) * framesize
-                    frames_required = yield b"\x00" * silence_bytes
+                    # 静音长度与设备请求帧数精确对齐，避免回调欠载。
+                    frames_required = yield b"\x00" * need
                     need = max(frames_required, 1) * framesize
                     continue
                 if len(pcm) == 0:
@@ -464,17 +469,31 @@ class MiniAudioPlayer(AudioPlayer):
                 # 等待到真实数据：回到累积循环继续补充
                 pending += pcm
 
-        generator = _feed()
+        generator = _feed(first)
         try:
             next(generator)  # 素数化生成器，满足 PlaybackDevice.start 的契约
             device.start(generator)
-            done.wait()  # 阻塞等待设备回调消费完整个流
-        except Exception as exc:  # noqa: BLE001 - 播放失败不应中断主循环
+            # 阻塞等待设备回调消费完整个流；设备异常停止时按轮询超时退出，避免主循环挂死。
+            while not done.wait(timeout=self._DONE_POLL_SECONDS):
+                # 设备不再调用回调（异常/释放）且解码线程已退出、队列已消费完时提前结束
+                if not worker.is_alive() and pcm_queue.empty():
+                    break
+        except Exception as exc:  # noqa: BLE001 - 播放失败不吞掉异常，交由调用方降级
             logger.warning("Failed to stream playback: %s", exc)
+            # 统一包装为 RuntimeError，保证 pipeline 的降级分支能捕获并转入一次性播放
+            raise RuntimeError(f"Failed to stream playback: {exc}") from exc
         finally:
             with contextlib.suppress(Exception):  # 停止设备失败可忽略
                 device.stop()
-            generator.close()
+            with contextlib.suppress(Exception):  # 关闭生成器异常可忽略，不替换原始异常
+                generator.close()
+            # 排空有界队列，解除解码线程在 put 上的阻塞，确保 worker 可退出、避免线程泄漏
+            while worker.is_alive():
+                try:
+                    pcm_queue.get_nowait()
+                    pcm_queue.task_done()
+                except queue.Empty:
+                    break
             worker.join(timeout=5.0)
             # 仅在正常播放完毕后传播解码线程错误，避免 GeneratorExit 期间替换异常
             if decode_error:

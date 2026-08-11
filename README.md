@@ -9,10 +9,10 @@
 ```
 游戏运行 → 屏幕捕获（2-4 FPS）→ OCR 文本识别 → 文本去重/变化检测
     → TTS 流式合成 → 流式播放（miniaudio，边合成边播放）
-    └─ 流式不可用时降级：一次性合成 → 阻塞播放（winsound）
+    └─ 流式不可用时降级：一次性合成 → 播放（winsound / miniaudio）
 ```
 
-> 流式：当 TTS 引擎与播放器均支持流式（Edge TTS + miniaudio）时，优先边合成边播放以降低端到端感知延迟；若引擎不支持流式（如离线 VITS 骨架）或未安装 `playback`（miniaudio）依赖组，则自动降级为一次性合成 + winsound 阻塞播放，功能不中断。
+> 流式：当 TTS 引擎与播放器均支持流式（Edge TTS + miniaudio）时，优先边合成边播放以降低端到端感知延迟；若引擎不支持流式（如离线 VITS 骨架）或未安装 `playback`（miniaudio）依赖组，则自动降级为一次性合成 + 阻塞播放。注意：Edge TTS 输出 MP3，`winsound` 原生仅支持 WAV，未安装 `playback` 依赖组时无法解码 MP3，此时非 WAV 音频会被跳过播放，不会中断程序运行。
 
 ## 环境准备
 
@@ -35,7 +35,7 @@ uv sync
 激活单个组可用 `uv sync --extra capture --extra ocr-rapid --extra tts-online --extra playback`，或一次性激活全部用 `uv sync --all-extras`。
 
 后端依赖未激活时，应用会给出对应的激活提示并自动尝试降级到备选后端。
-> 注意：Edge TTS 输出 MP3，需激活 `playback` 组（miniaudio）才能播放；激活后使用 miniaudio 流式播放（边合成边播放），未激活时应用会跳过播放。
+> 注意：Edge TTS 输出 MP3，需激活 `playback` 组（miniaudio）才能播放；激活后使用 miniaudio 流式播放（边合成边播放），未激活时非 WAV 音频（如 Edge TTS 的 MP3）会被跳过播放。
 
 > 隐私提示：使用 Edge TTS（在线 TTS）时，从屏幕捕获并经 OCR 识别出的文本会通过网络发送至微软 Edge TTS API 进行语音合成。若对隐私敏感，请使用离线 TTS（VITS）后端。
 
