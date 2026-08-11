@@ -25,7 +25,9 @@
         → 文本变化检测（与上一句对比）
             ├── 无变化 → 丢弃
             └── 有变化 → 送入播放队列
-                            → TTS 语音合成 → 音频播放
+                            → TTS 流式合成 → 流式播放（miniaudio，边合成边播放）
+                            └─ 流式不可用时降级：一次性合成 → 阻塞播放
+                               （Edge TTS 输出 MP3，未安装 playback 时非 WAV 音频跳过播放）
 ```
 
 ---
@@ -325,11 +327,12 @@ class TextToSpeech(ABC):
 ┌─────────────────────────────────────────────────────────┐
 │                      Pipeline 编排层                      │
 │                                                         │
-│   ScreenCapture ──→ TextRecognizer ──→ TextToSpeech     │
-│   (capture/)         (recognition/)      (tts/)         │
+│   ScreenCapture ──→ TextRecognizer ──→ TextToSpeech ──→ AudioPlayer │
+│   (capture/)         (recognition/)      (tts/)         (app/player) │
 │                                                         │
-│  CaptureResult → bytes → RecognitionResult → str → TTSResult │
-│  .image              └─→ .recognize(image)      └─→ .synthesize(text) │
+│  CaptureResult → bytes → RecognitionResult → str → TTSResult 流/一次性 │
+│  .image              └─→ .recognize(image)      └─→ .synthesize_stream │
+│                                              /  .synthesize → .play │
 │                                                         │
 ├─────────────────────────────────────────────────────────┤
 │                    具体实现层（后续开发）                   │
@@ -337,8 +340,18 @@ class TextToSpeech(ABC):
 │  DXCamCapture    PaddleOCREngine    EdgeTTSEngine       │
 │  MSSCapture      RapidOCREngine     VITSEngine          │
 │  ...             ...                ...                 │
+│                               MiniAudioPlayer（流式）   │
+│                               WinsoundPlayer（降级）    │
 └─────────────────────────────────────────────────────────┘
 ```
+
+流式播放采用**缓冲预取**设计，避免网络传输与 MP3 解码的抖动导致播放停顿：
+
+- `MiniAudioPlayer.play_stream` 启动一个独立的**解码工作线程**，持续从 TTS 流式迭代器拉取原始音频并解码为 PCM，写入带上限的缓冲队列（`queue.Queue`，默认 64 块）。
+- **保持解码状态的流式解码器**：用 `miniaudio.stream_any` + 自定义 `StreamableSource` 连续喂入所有 chunk 字节，解码器内部状态全程保留。若改为对每个 chunk 独立 `miniaudio.decode`，会因 MP3 块边界非帧对齐而丢失约 30% 的帧，导致音频变短、语速变快、出现爆音杂音。
+- **设备回调线程**只从缓冲队列消费已解码的 PCM，不接触网络与解码。回调**非阻塞**地持续累积缓冲块，直到满足 miniaudio 请求的帧数后才一次性返回，保证每次回调数据对齐、播放连续。
+- 队列起到**水位吸收**作用：解码快于播放时预填缓冲，解码慢于播放时由缓冲补位；仅在队列空且解码仍在进行时先短时等待解码线程补充，仍无数据才输出少量静音桥接（20ms），减少全零静音交界处的爆音。
+- 播放器启动时会**预取首个数据块**，降低首帧延迟。
 
 ### 4.3 源代码目录结构
 

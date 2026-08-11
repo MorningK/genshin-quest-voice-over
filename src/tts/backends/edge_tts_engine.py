@@ -215,6 +215,11 @@ class EdgeTTSEngine(TextToSpeech):
         return self._initialized
 
     @property
+    def supports_streaming(self) -> bool:
+        """Edge TTS 支持流式合成，恒为 True。"""
+        return True
+
+    @property
     def available_voices(self) -> list[str]:
         """返回当前引擎支持的音色列表。"""
         return list(self._voices)
