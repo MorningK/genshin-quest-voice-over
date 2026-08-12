@@ -287,11 +287,22 @@ class VoiceOverApp:
         if self._capture is None or self._recognizer is None or self._tts is None or self._player is None:
             return
 
+        # 各步骤计时：捕获 → 识别 → 文本处理 → 合成 → 播放
+        step_start = time.perf_counter()
+
         result = self._capture.capture()
-        logger.debug("Capture result: %s", result)
+        capture_elapsed = (time.perf_counter() - step_start) * 1000
+        logger.debug("Step [capture] took %.1f ms", capture_elapsed)
+
+        step_start = time.perf_counter()
         recognition = self._recognizer.recognize(result.image)
-        logger.debug("Recognition result: %s", recognition)
+        recognize_elapsed = (time.perf_counter() - step_start) * 1000
+        logger.debug("Step [recognize] took %.1f ms", recognize_elapsed)
+
+        step_start = time.perf_counter()
         request = self._tracker.should_play(recognition.text)
+        track_elapsed = (time.perf_counter() - step_start) * 1000
+        logger.debug("Step [track] took %.1f ms", track_elapsed)
         if request is None:
             logger.debug("No new dialogue, skip.")
             return
@@ -301,13 +312,34 @@ class VoiceOverApp:
         # 优先流式：TTS 与播放器均支持流式时，边合成边播放以降低感知延迟
         if self._tts.supports_streaming and self._player.supports_streaming:
             try:
+                # synthesize_stream 返回惰性迭代器，需在消费首个 chunk 时计时才反映真实合成耗时
+                synth_start = time.perf_counter()
                 chunks = self._tts.synthesize_stream(request.text)
-                self._player.play_stream(chunks)
+
+                def _timed_chunks() -> Any:
+                    logged = False
+                    for chunk in chunks:
+                        if not logged:
+                            elapsed = (time.perf_counter() - synth_start) * 1000
+                            logger.debug("Step [tts-stream] took %.1f ms", elapsed)
+                            logged = True
+                        yield chunk
+
+                play_start = time.perf_counter()
+                self._player.play_stream(_timed_chunks())
+                play_elapsed = (time.perf_counter() - play_start) * 1000
+                logger.debug("Step [play-stream] took %.1f ms", play_elapsed)
                 return
             except (RuntimeError, ValueError) as exc:
                 logger.warning("Streaming playback failed, fallback to one-shot: %s", exc)
 
-        # 降级：一次性合成 + 阻塞播放
+        # 降级：一次性合成 + 阻塞播放；重置计时，避免包含已失败的流式尝试耗时
+        step_start = time.perf_counter()
         tts_result = self._tts.synthesize(request.text)
+        tts_elapsed = (time.perf_counter() - step_start) * 1000
         logger.debug("TTS result: %s", tts_result)
+        logger.debug("Step [tts] took %.1f ms", tts_elapsed)
+        step_start = time.perf_counter()
         self._player.play(tts_result)
+        play_elapsed = (time.perf_counter() - step_start) * 1000
+        logger.debug("Step [play] took %.1f ms", play_elapsed)
