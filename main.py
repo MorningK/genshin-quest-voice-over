@@ -23,6 +23,8 @@ def _setup_logging(verbose: bool = False) -> None:
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
         datefmt="%H:%M:%S",
+        # force 覆盖可能已存在的根 handler，确保 -v 能稳定生效
+        force=True,
     )
 
 
