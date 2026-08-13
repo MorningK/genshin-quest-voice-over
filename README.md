@@ -1,5 +1,7 @@
 # genshin-quest-voice-over
 
+> **语言 / Languages**：[中文](README.md) · [English](README.en.md) · [日本語](README.ja.md) · [한국어](README.ko.md)
+
 为《原神》中没有配音的任务（主要是世界任务）提供实时的对话文本朗读服务。
 
 工具通过屏幕捕获识别游戏内对话字幕，经 OCR 提取文本后用 TTS 合成语音并播放，全程不修改游戏客户端。
