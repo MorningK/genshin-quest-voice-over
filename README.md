@@ -29,12 +29,27 @@ uv sync
 | 屏幕捕获（DXCam + MSS） | `capture` | `uv sync --extra capture` |
 | OCR（RapidOCR 默认） | `ocr-rapid` | `uv sync --extra ocr-rapid` |
 | OCR（PaddleOCR 备选） | `ocr` | `uv sync --extra ocr` |
+| OCR GPU（RapidOCR 备选） | `ocr-rapid-gpu` | `uv sync --extra ocr-rapid-gpu` |
 | TTS（Edge TTS 在线） | `tts-online` | `uv sync --extra tts-online` |
 | 播放（流式播放 + 非 WAV 解码） | `playback` | `uv sync --extra playback` |
 
 激活单个组可用 `uv sync --extra capture --extra ocr-rapid --extra tts-online --extra playback`，或一次性激活全部用 `uv sync --all-extras`。
 
 后端依赖未激活时，应用会给出对应的激活提示并自动尝试降级到备选后端。
+
+### GPU 加速（可选）
+
+OCR 识别默认在 CPU 上运行，可通过 `--gpu` 开关启用 GPU 推理加速。GPU 依赖与 CPU 版相互冲突，需按后端二选一安装：
+
+- **RapidOCR（推荐）**：启用 `ocr-rapid-gpu` 组（onnxruntime-gpu），替代 `ocr-rapid` 组：
+
+  ```bash
+  uv sync --extra ocr-rapid-gpu --extra capture --extra tts-online --extra playback
+  ```
+
+- **PaddleOCR**：PaddlePaddle 3.x 的 GPU 版（`paddlepaddle-gpu`）仅发布在 Paddle 官方源，无法作为常规 PyPI 依赖。请从 [Paddle 安装指南](https://www.paddlepaddle.org.cn/documentation/zh//install/index_cn.html) 选择对应 CUDA 版本的官方源安装 GPU 版 `paddlepaddle`（替代 CPU 版），其余依赖仍用 `uv sync --extra ocr` 安装。
+
+安装 GPU 依赖后，运行时加上 `--gpu` 即可启用加速（否则 GPU 依赖不会被使用，仍走 CPU）。
 > 注意：Edge TTS 输出 MP3，需激活 `playback` 组（miniaudio）才能播放；激活后使用 miniaudio 流式播放（边合成边播放），未激活时非 WAV 音频（如 Edge TTS 的 MP3）会被跳过播放。
 
 > 隐私提示：使用 Edge TTS（在线 TTS）时，从屏幕捕获并经 OCR 识别出的文本会通过网络发送至微软 Edge TTS API 进行语音合成。若对隐私敏感，请使用离线 TTS（VITS）后端。
@@ -64,6 +79,9 @@ uv run python main.py --language ch --voice zh-CN-XiaoxiaoNeural
 
 # 使用离线 TTS（VITS，需指定模型路径；当前为骨架实现，实际推理待接入）
 uv run python main.py --tts vits --tts-model-path /path/to/model
+
+# 使用 GPU 加速 OCR（需先安装对应 GPU 依赖组，见上文"GPU 加速（可选）"）
+uv run python main.py --gpu
 ```
 
 按 `Ctrl+C` 优雅停止并释放资源。
