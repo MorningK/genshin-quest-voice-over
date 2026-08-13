@@ -31,6 +31,7 @@ class AppConfig:
         monitor_index: 目标显示器索引，0 为主屏。仅与 region 同时生效。
         fps: 目标帧率。
         language: OCR 识别语言。
+        use_gpu: 是否使用 GPU 加速 OCR 推理。
         voice: TTS 音色。
         tts_model_path: 离线 TTS 模型路径，仅 tts_backend="vits" 时使用。
         verbose: 是否输出 debug 级别日志。
@@ -43,6 +44,7 @@ class AppConfig:
     monitor_index: int = 0
     fps: int = DEFAULT_FPS
     language: str = DEFAULT_LANGUAGE
+    use_gpu: bool = False
     voice: str = DEFAULT_VOICE
     tts_model_path: str | None = None
     verbose: bool = False
@@ -59,9 +61,10 @@ class AppConfig:
         """转换为 OCR 识别配置。
 
         Returns:
-            RecognitionConfig 对象，语言由 AppConfig.language 决定。
+            RecognitionConfig 对象，语言由 AppConfig.language 决定，
+            GPU 加速由 AppConfig.use_gpu 决定。
         """
-        return RecognitionConfig(language=self.language)
+        return RecognitionConfig(language=self.language, use_gpu=self.use_gpu)
 
     def to_tts_config(self) -> TTSConfig:
         """转换为 TTS 合成配置。
@@ -137,6 +140,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="输出 debug 级别日志（含各步骤耗时明细）",
     )
     parser.add_argument("--language", default=DEFAULT_LANGUAGE, help=f"OCR 识别语言（默认 {DEFAULT_LANGUAGE}）")
+    parser.add_argument("--gpu", action="store_true", help="使用 GPU 加速 OCR 推理（需安装对应 GPU 依赖组）")
     parser.add_argument("--voice", default=DEFAULT_VOICE, help=f"TTS 音色（默认 {DEFAULT_VOICE}）")
     parser.add_argument(
         "--tts-model-path",
@@ -179,6 +183,7 @@ def parse_args(argv: list[str] | None = None) -> AppConfig:
         monitor_index=monitor_index,
         fps=args.fps,
         language=args.language,
+        use_gpu=args.gpu,
         voice=args.voice,
         tts_model_path=args.tts_model_path,
         verbose=args.verbose,

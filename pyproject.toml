@@ -24,6 +24,13 @@ ocr-rapid = [
     "onnxruntime>=1.28.0",
     "rapidocr>=3.9.2",
 ]
+# OCR GPU（RapidOCR）：与 ocr-rapid 组互斥，启用 GPU 时替代 ocr-rapid 组
+# 说明：PaddleOCR 的 GPU 版（paddlepaddle-gpu 3.x）仅发布在 Paddle 官方源，
+#       无法作为常规 PyPI 依赖，需按 README 从官方源单独安装。
+ocr-rapid-gpu = [
+    "onnxruntime-gpu>=1.28.0",
+    "rapidocr>=3.9.2",
+]
 # TTS 在线默认：Edge TTS
 tts-online = [
     "edge-tts>=6.1.0",
@@ -39,6 +46,15 @@ dev = [
     "pre-commit>=4.6.0",
     "pyrefly>=1.2.0",
     "ruff>=0.15.14",
+]
+
+# ============================================
+# uv 配置 — 可选依赖组互斥声明
+# ============================================
+[tool.uv]
+# onnxruntime（CPU）与 onnxruntime-gpu（GPU）共享包名，二者互斥，不可同时激活
+conflicts = [
+    [{ extra = "ocr-rapid" }, { extra = "ocr-rapid-gpu" }],
 ]
 
 # ============================================

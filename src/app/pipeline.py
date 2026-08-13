@@ -92,7 +92,7 @@ def _build_recognizer(backend: str, config: AppConfig) -> TextRecognizer:
         raise RuntimeError(f"Unknown OCR backend: {backend}")
 
     engine.initialize(config.to_recognition_config())
-    logger.info("OCR backend initialized: %s", backend)
+    logger.info("OCR backend initialized: %s (gpu_requested=%s)", backend, config.use_gpu)
     return engine
 
 
