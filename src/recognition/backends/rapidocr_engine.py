@@ -22,6 +22,7 @@ from src.recognition.base import (
     TextRecognizer,
     sort_boxes_reading_order,
 )
+from src.recognition.preprocess import extract_dialogue_boxes, preprocess_frame
 
 logger = logging.getLogger(__name__)
 
@@ -109,8 +110,11 @@ class RapidOCREngine(TextRecognizer):
         if self._config is None:
             raise RuntimeError("RapidOCR engine is not configured.")
 
+        # 送入 OCR 前做灰度/对比度增强与轻度放大，提升小字号字幕召回率；
+        # 缺 OpenCV 时 preprocess_frame 返回原图，不影响既有行为
+        enhanced = preprocess_frame(image, self._config.capture_region)
         try:
-            result = self._engine(image)
+            result = self._engine(enhanced)
         except Exception as exc:
             raise RuntimeError("Failed to recognize text with RapidOCR.") from exc
 
@@ -150,12 +154,30 @@ class RapidOCREngine(TextRecognizer):
         avg_confidence = sum(confidences) / len(confidences) if confidences else 0.0
         full_text = "".join(b.text for b in ordered_boxes)
 
+        # 聚焦底部对白带：剔除右侧选项菜单/右上性能数据/名字标签等 UI 噪声，
+        # 仅保留玩家实际看到的对话文本，提升后续朗读准确率
+        try:
+            import numpy as _np
+        except ImportError:
+            _np = None  # type: ignore[assignment]
+        image_shape = image.shape[:2] if _np is not None and isinstance(image, _np.ndarray) else None
+        roi_boxes = extract_dialogue_boxes(ordered_boxes, image_shape)
+        roi_text = "".join(b.text for b in roi_boxes)
+        if roi_boxes and len(roi_boxes) != len(ordered_boxes):
+            logger.debug(
+                "ROI filtered %d/%d boxes, dialogue text: %s",
+                len(ordered_boxes) - len(roi_boxes),
+                len(ordered_boxes),
+                roi_text,
+            )
+
         return RecognitionResult(
             text=full_text,
             confidence=avg_confidence,
             boxes=ordered_boxes,
             timestamp=time.time(),
             language_detected=self._config.language,
+            roi_text=roi_text,
         )
 
     def release(self) -> None:

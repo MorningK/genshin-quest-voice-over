@@ -19,6 +19,30 @@ _ALNUM_RE = re.compile(r"[a-zA-Z0-9\u4e00-\u9fff]")
 # 判定新文本与上一句累积文本为同一句的相似度阈值
 _SIMILARITY_THRESHOLD = 0.9
 
+# 句末标点集合：字幕逐字追加时常因帧间抖动在末尾多出/丢失这些标点，
+# 去标点后再比对可避免把同一句误判为新句而整句重播。
+# 字符类以 ] 开头将其视为字面量，类内 [ ( ) 等均为字面量，无需转义。
+_TRAILING_PUNCT_RE = re.compile(r"[]。！？…，、；：" "''（）()【】~… \u3000]+$")
+_LEADING_PUNCT_RE = re.compile(r"^[]。！？…，、；：" "''（）()【】~… \u3000]+")
+
+# 游戏专属 UI 噪声规则：手柄按键提示、性能数据、UID、纯符号选项前缀等。
+# 每条规则命中即整行丢弃（这些文本不应被朗读）。
+_UI_NOISE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # 手柄按键提示：X 播放中 / A 确认 / B 返回 / 等
+    re.compile(r"^[ABXYLR]\s*[一-龥A-Za-z]{0,4}$"),
+    # 右上角性能数据：fps / GPU / ms / 帧率 等纯指标
+    re.compile(r"^\d+\s*(fps|ms|gpu|cpu|frames?)$", re.IGNORECASE),
+    re.compile(r"^(fps|gpu|cpu)\b", re.IGNORECASE),
+    # UID 等账号信息
+    re.compile(r"^uid[:：]?\s*\d{4,}$", re.IGNORECASE),
+    # NPC 名字标签：必须被「」/《》/『』/（）/""成对包裹的短标签
+    # （对话文本极少整句被此类符号包裹，故要求成对出现以不误伤普通短句）
+    re.compile(r"^[" "「『（《][一-龥A-Za-z0-9]{1,8}[" "」』）》]$"),
+    re.compile(r"^“[一-龥A-Za-z0-9]{1,8}”$"),
+    # 纯符号选项前缀（如 ▸ 领取奖励 已被坐标过滤，这里兜底清理多余符号）
+    re.compile(r"^[\s·•▪▸►◉○●\-—_]+$"),
+)
+
 
 def clean_text(text: str) -> str:
     """清洗 OCR 识别出的原始文本。
@@ -47,6 +71,36 @@ def is_noise(text: str) -> bool:
         True 表示是噪音，应被丢弃。
     """
     return not _ALNUM_RE.search(text)
+
+
+def _strip_punct(text: str) -> str:
+    """去除文本首尾标点与空白，用于对字幕抖动做容差比对。
+
+    Args:
+        text: 待处理的文本。
+
+    Returns:
+        去除首尾标点/空白后的文本；全部为标点时可能返回空串。
+    """
+    return _LEADING_PUNCT_RE.sub("", _TRAILING_PUNCT_RE.sub("", text)).strip()
+
+
+def filter_ui_noise(text: str) -> str | None:
+    """过滤单条游戏 UI 噪声文本。
+
+    针对《原神》截图中的手柄按键提示、性能数据、UID 等干扰文本，
+    命中规则时返回 None 表示应丢弃，否则返回原文本。
+
+    Args:
+        text: 已清洗的单条文本。
+
+    Returns:
+        过滤后的文本；若为 UI 噪声则返回 None。
+    """
+    for pattern in _UI_NOISE_PATTERNS:
+        if pattern.search(text):
+            return None
+    return text
 
 
 @dataclass(frozen=True)
@@ -94,6 +148,10 @@ class TextTracker:
         if not cleaned or is_noise(cleaned):
             return None
 
+        # 单条文本若命中游戏 UI 噪声规则（手柄按键提示/性能数据/UID 等），跳过
+        if filter_ui_noise(cleaned) is None:
+            return None
+
         if cleaned == self._last_text:
             return None
 
@@ -108,8 +166,14 @@ class TextTracker:
             return PlayRequest(text=delta, kind="delta")
 
         # 与上一句高度相似（仅 OCR 帧间轻微抖动导致个别字漏识/多字/空格），视为同一句对话，不触发播放；
-        # 需要有更好的办法来解决在抖动结果上追加文字时因状态漂移而重复播放整句的问题
-        if SequenceMatcher(None, self._last_text, cleaned).ratio() >= _SIMILARITY_THRESHOLD:
+        # 比对前去掉首尾标点/空白，避免句末「？」「。」抖动造成整句重播
+        last_stripped = _strip_punct(self._last_text)
+        cleaned_stripped = _strip_punct(cleaned)
+        if (
+            last_stripped
+            and cleaned_stripped
+            and SequenceMatcher(None, last_stripped, cleaned_stripped).ratio() >= _SIMILARITY_THRESHOLD
+        ):
             return None
 
         self._last_text = cleaned
