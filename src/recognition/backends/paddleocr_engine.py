@@ -10,10 +10,8 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any, ClassVar
 
-import numpy as np
-
 if TYPE_CHECKING:
-    from numpy.typing import NDArray
+    import numpy as np
 
 from src.app.textproc import filter_ui_noise
 from src.common import Point
@@ -24,26 +22,14 @@ from src.recognition.base import (
     TextRecognizer,
     sort_boxes_reading_order,
 )
-from src.recognition.preprocess import extract_dialogue_boxes, preprocess_frame
+from src.recognition.preprocess import (
+    DEFAULT_MAX_INPUT_SIZE,
+    downscale_to_max_side,
+    extract_dialogue_boxes,
+    preprocess_frame,
+)
 
 logger = logging.getLogger(__name__)
-
-
-def _resize_nearest(image: NDArray[np.uint8], new_h: int, new_w: int) -> NDArray[np.uint8]:
-    """用最近邻插值将图像缩放到指定尺寸（纯 numpy 实现）。
-
-    Args:
-        image: 原始图像（H x W x C）。
-        new_h: 目标高度。
-        new_w: 目标宽度。
-
-    Returns:
-        缩放后的图像。
-    """
-    src_h, src_w = image.shape[:2]
-    y = np.clip((np.arange(new_h) * src_h // new_h), 0, src_h - 1)
-    x = np.clip((np.arange(new_w) * src_w // new_w), 0, src_w - 1)
-    return image[y][:, x]
 
 
 class PaddleOCREngine(TextRecognizer):
@@ -64,7 +50,7 @@ class PaddleOCREngine(TextRecognizer):
     # 送入 OCR 的图像最大边长上限。过大的输入（如 4K 全屏帧）会触发
     # PaddlePaddle 的原生访问冲突崩溃，且识别速度大幅下降；
     # 对字幕场景，限制边长后既能规避崩溃，也不影响识别准确率。
-    _MAX_INPUT_SIZE = 1280
+    _MAX_INPUT_SIZE = DEFAULT_MAX_INPUT_SIZE
 
     def __init__(self) -> None:
         """初始化实例，尚未加载模型。"""
@@ -128,7 +114,7 @@ class PaddleOCREngine(TextRecognizer):
         if self._config is None:
             raise RuntimeError("PaddleOCR engine is not configured.")
 
-        processed = self._downscale(image)
+        processed = downscale_to_max_side(image, self._MAX_INPUT_SIZE)
         # 送入 OCR 前做灰度/对比度增强与轻度放大，提升小字号字幕召回率；
         # 传入 max_output_size 约束增强后尺寸，不超过 PaddlePaddle 防崩溃上限 _MAX_INPUT_SIZE。
         # 缺 OpenCV 时 preprocess_frame 返回 (processed, False), 不生成 roi_text
@@ -205,33 +191,6 @@ class PaddleOCREngine(TextRecognizer):
             language_detected=self._config.language,
             roi_text=roi_text,
         )
-
-    @staticmethod
-    def _downscale(image: np.ndarray | bytes) -> np.ndarray | bytes:
-        """将图像等比缩放，使最长边不超过上限，避免大图触发原生崩溃。
-
-        Args:
-            image: 输入的 BGR 图像（numpy 数组或文件字节）。
-
-        Returns:
-            缩放后的图像；字节输入无法安全缩放，原样返回。
-
-        Raises:
-            ValueError: numpy 输入为空时抛出。
-        """
-        if not isinstance(image, np.ndarray):
-            return image
-        if image.size == 0:
-            raise ValueError("Input image is empty.")
-        height, width = image.shape[:2]
-        max_side = max(height, width)
-        if max_side <= PaddleOCREngine._MAX_INPUT_SIZE:
-            return image
-
-        scale = PaddleOCREngine._MAX_INPUT_SIZE / max_side
-        new_h = max(1, round(height * scale))
-        new_w = max(1, round(width * scale))
-        return _resize_nearest(image, new_h, new_w)
 
     def release(self) -> None:
         """释放 OCR 引擎占用的模型资源。"""

@@ -23,7 +23,12 @@ from src.recognition.base import (
     TextRecognizer,
     sort_boxes_reading_order,
 )
-from src.recognition.preprocess import extract_dialogue_boxes, preprocess_frame
+from src.recognition.preprocess import (
+    DEFAULT_MAX_INPUT_SIZE,
+    downscale_to_max_side,
+    extract_dialogue_boxes,
+    preprocess_frame,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +52,10 @@ class RapidOCREngine(TextRecognizer):
     依赖库 ``rapidocr`` 与 ``onnxruntime`` 仅在 initialize() 时惰性导入，
     未安装时抛出带明确提示的 RuntimeError。
     """
+
+    # 送入 OCR 的图像最大边长上限。过大的输入（如全屏帧）会显著拉高推理耗时与
+    # CPU/GPU 资源占用，进而与游戏抢占性能；对字幕场景，限制边长后不影响识别准确率。
+    _MAX_INPUT_SIZE = DEFAULT_MAX_INPUT_SIZE
 
     def __init__(self) -> None:
         """初始化实例，尚未加载模型。"""
@@ -111,9 +120,13 @@ class RapidOCREngine(TextRecognizer):
         if self._config is None:
             raise RuntimeError("RapidOCR engine is not configured.")
 
+        # 先等比缩小最长边至 _MAX_INPUT_SIZE 以内，显著降低推理计算量与资源占用，
+        # 避免全屏大图与游戏抢占 CPU/GPU 导致卡顿；字节输入原样传给 preprocess_frame。
+        processed = downscale_to_max_side(image, self._MAX_INPUT_SIZE)
         # 送入 OCR 前做灰度/对比度增强与轻度放大，提升小字号字幕召回率；
+        # 传入 max_output_size 约束增强后尺寸，不超过 _MAX_INPUT_SIZE，避免放大回原尺寸。
         # 缺 OpenCV 时 preprocess_frame 返回 (image, False)，不生成 roi_text
-        enhanced, applied = preprocess_frame(image, self._config.capture_region)
+        enhanced, applied = preprocess_frame(processed, self._config.capture_region, self._MAX_INPUT_SIZE)
         try:
             result = self._engine(enhanced)
         except Exception as exc:

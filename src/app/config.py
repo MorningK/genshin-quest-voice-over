@@ -17,6 +17,7 @@ from src.tts import TTSConfig
 DEFAULT_FPS = 4
 DEFAULT_LANGUAGE = "ch"
 DEFAULT_VOICE = "zh-CN-XiaoxiaoNeural"
+DEFAULT_FRAME_SIMILARITY_STEP = 4
 
 
 @dataclass
@@ -35,6 +36,7 @@ class AppConfig:
         voice: TTS 音色。
         tts_model_path: 离线 TTS 模型路径，仅 tts_backend="vits" 时使用。
         verbose: 是否输出 debug 级别日志。
+        frame_similarity_step: 帧缓存比对的像素降采样步长，值越大计算量越小、精度越低。
     """
 
     capture_backend: str = "dxcam"
@@ -48,6 +50,7 @@ class AppConfig:
     voice: str = DEFAULT_VOICE
     tts_model_path: str | None = None
     verbose: bool = False
+    frame_similarity_step: int = DEFAULT_FRAME_SIMILARITY_STEP
 
     def to_capture_config(self) -> CaptureConfig:
         """转换为屏幕捕获配置。
@@ -133,6 +136,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--select-region",
+        default=False,
         action="store_true",
         help="通过鼠标拖拽框选捕获区域（与 --region 互斥）",
     )
@@ -151,6 +155,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="离线 TTS（vits）模型路径，使用 --tts vits 时必须指定",
     )
+    parser.add_argument(
+        "--frame-similarity-step",
+        type=int,
+        default=DEFAULT_FRAME_SIMILARITY_STEP,
+        help=f"帧缓存比对的像素降采样步长（默认 {DEFAULT_FRAME_SIMILARITY_STEP}）",
+    )
     return parser
 
 
@@ -167,6 +177,8 @@ def parse_args(argv: list[str] | None = None) -> AppConfig:
     args = parser.parse_args(argv)
     if args.fps <= 0:
         parser.error("--fps must be a positive integer.")
+    if args.frame_similarity_step <= 0:
+        parser.error("--frame-similarity-step must be a positive integer.")
     if args.select_region and args.region is not None:
         parser.error("--region and --select-region are mutually exclusive.")
 
@@ -191,4 +203,5 @@ def parse_args(argv: list[str] | None = None) -> AppConfig:
         voice=args.voice,
         tts_model_path=args.tts_model_path,
         verbose=args.verbose,
+        frame_similarity_step=args.frame_similarity_step,
     )

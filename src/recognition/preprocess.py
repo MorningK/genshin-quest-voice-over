@@ -36,6 +36,14 @@ _NAME_TAG_MAX_HEIGHT = 80
 # 字幕最小高度阈值：低于此值的碎片多半为装饰性 UI 元素（如分隔符、图标）
 _DIALOGUE_MIN_HEIGHT = 8
 
+# 上述高度阈值的标定基准高度（1080p）。OCR 输入可能被降采样到其他分辨率
+# （如 720p），阈值按 ref_height 相对此基准等比缩放，保持判断语义一致。
+_REFERENCE_HEIGHT = 1080
+
+# 送入 OCR 的图像最大边长上限。过大的输入（如 4K 全屏帧）会显著拉高推理耗时与
+# CPU/GPU 资源占用，进而与游戏抢占性能；对字幕场景，限制边长后不影响识别准确率。
+DEFAULT_MAX_INPUT_SIZE = 1280
+
 
 def _center_x(box: RecognitionBox) -> int:
     """计算识别区域的水平中心 x 坐标。
@@ -65,6 +73,56 @@ def _box_height(box: RecognitionBox) -> int:
         return 0
     ys = [p.y for p in box.points]
     return max(ys) - min(ys)
+
+
+def downscale_to_max_side(image: object, max_side: int) -> object:
+    """将图像等比缩放，使最长边不超过上限，降低送入 OCR 的推理计算量。
+
+    采用最近邻插值（纯 numpy 实现，不依赖 OpenCV）。过大的输入（如全屏帧）会
+    显著拉高 OCR 推理耗时与 CPU/GPU 资源占用，限制边长后像素量线性下降，
+    对字幕场景不影响识别准确率。numpy 数组直接缩放；bytes 编码图像先尝试用
+    OpenCV 解码后应用上限，缺 OpenCV 或解码失败时返回原字节并记录警告。
+
+    Args:
+        image: 输入的 BGR 图像（numpy 数组或文件字节）。
+        max_side: 缩放后最长边的像素上限。
+
+    Returns:
+        缩放后的图像；最长边未超过上限时原样返回；无法解码的字节输入原样返回。
+
+    Raises:
+        ValueError: 输入 numpy 数组为空时抛出。
+    """
+    if np is None:
+        return image
+    if isinstance(image, np.ndarray):
+        if image.size == 0:
+            raise ValueError("Input image is empty.")
+        height, width = image.shape[:2]
+        long_side = max(height, width)
+        if long_side <= max_side:
+            return image
+
+        scale = max_side / long_side
+        new_h = max(1, round(height * scale))
+        new_w = max(1, round(width * scale))
+        y = np.clip((np.arange(new_h) * height // new_h), 0, height - 1)
+        x = np.clip((np.arange(new_w) * width // new_w), 0, width - 1)
+        return image[y][:, x]
+    if isinstance(image, bytes):
+        # bytes 编码图像无法直接读取尺寸，先尝试用 OpenCV 解码再应用尺寸上限，
+        # 避免高分辨率编码图绕过限制继续消耗资源。
+        try:
+            import cv2  # 惰性导入，缺依赖时降级
+        except ImportError:
+            logger.warning("Cannot decode byte image without OpenCV; size cap not enforced.")
+            return image
+        decoded = cv2.imdecode(np.frombuffer(image, dtype=np.uint8), cv2.IMREAD_COLOR)
+        if decoded is not None:
+            return downscale_to_max_side(decoded, max_side)
+        logger.warning("Failed to decode byte image; size cap not enforced.")
+        return image
+    return image
 
 
 def preprocess_frame(
@@ -128,7 +186,8 @@ def extract_dialogue_boxes(
 
     依据坐标启发式排除：右侧选项菜单（x 中心偏右）、右上性能数据
     （对白带之上的顶部区域）、过大的 NPC 名字标签、过碎的装饰元素。
-    坐标判断基于图像自身像素尺寸（image_shape），与 OCR 框坐标空间一致。
+    坐标判断基于图像自身像素尺寸（image_shape），与 OCR 框坐标空间一致；
+    高度阈值按 ref_height 相对 1080p 标定等比缩放，适配降采样后的输入分辨率。
 
     Args:
         boxes: OCR 识别出的全部文字区域。
@@ -147,8 +206,14 @@ def extract_dialogue_boxes(
         # 保证坐标比例判断与真实画面一致
         all_ys = [p.y for b in boxes for p in b.points]
         all_xs = [p.x for b in boxes for p in b.points]
-        ref_height = max(1, max(all_ys)) if all_ys else 1080
+        ref_height = max(1, max(all_ys)) if all_ys else _REFERENCE_HEIGHT
         ref_width = max(1, max(all_xs)) if all_xs else 1920
+
+    # 高度阈值按 ref_height 相对 1080p 标定等比缩放：OCR 输入被降采样后，
+    # 对白框/名字标签的实际像素高度同步缩小，固定 8/80 阈值会导致误判。
+    height_scale = ref_height / _REFERENCE_HEIGHT
+    dialogue_min_h = max(1, round(_DIALOGUE_MIN_HEIGHT * height_scale))
+    name_tag_max_h = max(_NAME_TAG_MAX_HEIGHT, round(_NAME_TAG_MAX_HEIGHT * height_scale))
 
     # 对白带下边界：从图像底部向上回退 DIALOGUE_BAND_RATIO 高度
     band_top = ref_height * (1.0 - _DIALOGUE_BAND_RATIO)
@@ -165,11 +230,11 @@ def extract_dialogue_boxes(
         cx = (left + right) // 2
 
         # 排除过碎的装饰性碎片
-        if box_h < _DIALOGUE_MIN_HEIGHT:
+        if box_h < dialogue_min_h:
             continue
 
         # 排除 NPC 名字标签：字号过大（通常为对白的数倍）
-        if box_h > _NAME_TAG_MAX_HEIGHT:
+        if box_h > name_tag_max_h:
             continue
 
         # 排除右侧选项菜单：水平中心明显偏右
