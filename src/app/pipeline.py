@@ -11,6 +11,8 @@ import threading
 import time
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
+
 from src.app.player import MiniAudioPlayer, WinsoundPlayer
 from src.app.textproc import TextTracker
 
@@ -176,6 +178,8 @@ class VoiceOverApp:
         self._tracker = TextTracker()
         self._stop_event = threading.Event()
         self._initialized = False
+        # 上一帧降采样缓存副本，用于帧相似度比对；None 表示尚无缓存（首帧）
+        self._last_frame: np.ndarray | None = None
 
     def start(self) -> int:
         """初始化引擎并进入捕获主循环。
@@ -282,6 +286,34 @@ class VoiceOverApp:
             else:
                 next_time = time.perf_counter()
 
+    def _frame_skipped(self, current: np.ndarray) -> bool:
+        """判断当前帧是否与上一帧相同或高度相似，应跳过本次处理。
+
+        先比对缓存是否存在与两帧尺寸是否一致，再通过降采样均值绝对差度量相似度；
+        完全一致时直接短路返回 True，避免执行昂贵的均值计算。
+
+        Args:
+            current: 当前帧图像（numpy uint8 BGR 数组）。
+
+        Returns:
+            True 表示当前帧与上一帧相同或高度相似，应跳过后续处理。
+        """
+        last = self._last_frame
+        step = self._config.frame_similarity_step
+        if last is None:
+            return False
+        if last.shape != current[::step, ::step].shape:
+            return False
+        if np.array_equal(last, current[::step, ::step]):
+            return True
+        # 计算降采样帧的均值绝对差并映射为相似度（BGR 0~255 灰度范围）
+        mad = np.abs(current[::step, ::step].astype(np.float32) - last).mean()
+        similarity = 1.0 - mad / 255.0
+        if similarity >= self._config.frame_similarity_threshold:
+            logger.debug("Frame skipped, similarity=%.4f", similarity)
+            return True
+        return False
+
     def _process_frame(self) -> None:
         """执行单帧处理：捕获、识别、判断变化并合成播放。"""
         if self._capture is None or self._recognizer is None or self._tts is None or self._player is None:
@@ -293,6 +325,13 @@ class VoiceOverApp:
         result = self._capture.capture()
         capture_elapsed = (time.perf_counter() - step_start) * 1000
         logger.debug("Step [capture] took %.1f ms", capture_elapsed)
+
+        # 帧相似度缓存：与上一帧相同或高度相似时跳过 OCR 及后续处理，降低无效计算
+        if self._frame_skipped(result.image):
+            return
+        # 仅缓存降采样副本，节省内存；copy 避免后端复用缓冲导致比对失真
+        step = self._config.frame_similarity_step
+        self._last_frame = result.image[::step, ::step].copy()
 
         step_start = time.perf_counter()
         recognition = self._recognizer.recognize(result.image)

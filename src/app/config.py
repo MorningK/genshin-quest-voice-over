@@ -17,6 +17,8 @@ from src.tts import TTSConfig
 DEFAULT_FPS = 4
 DEFAULT_LANGUAGE = "ch"
 DEFAULT_VOICE = "zh-CN-XiaoxiaoNeural"
+DEFAULT_FRAME_SIMILARITY_THRESHOLD = 0.98
+DEFAULT_FRAME_SIMILARITY_STEP = 4
 
 
 @dataclass
@@ -35,6 +37,8 @@ class AppConfig:
         voice: TTS 音色。
         tts_model_path: 离线 TTS 模型路径，仅 tts_backend="vits" 时使用。
         verbose: 是否输出 debug 级别日志。
+        frame_similarity_threshold: 帧相似度缓存阈值，当前帧与上一帧相似度≥该值时跳过处理（0~1）。
+        frame_similarity_step: 帧相似度比对的像素降采样步长，值越大计算量越小、精度越低。
     """
 
     capture_backend: str = "dxcam"
@@ -48,6 +52,8 @@ class AppConfig:
     voice: str = DEFAULT_VOICE
     tts_model_path: str | None = None
     verbose: bool = False
+    frame_similarity_threshold: float = DEFAULT_FRAME_SIMILARITY_THRESHOLD
+    frame_similarity_step: int = DEFAULT_FRAME_SIMILARITY_STEP
 
     def to_capture_config(self) -> CaptureConfig:
         """转换为屏幕捕获配置。
@@ -111,6 +117,27 @@ def _parse_region(value: str) -> Region:
         raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
+def _parse_similarity_threshold(value: str) -> float:
+    """解析帧相似度阈值，校验其在 0~1 范围内。
+
+    Args:
+        value: 阈值字符串。
+
+    Returns:
+        0~1 之间的浮点阈值。
+
+    Raises:
+        argparse.ArgumentTypeError: 数值非法或超出范围时抛出。
+    """
+    try:
+        threshold = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("similarity threshold must be a number.") from exc
+    if not 0.0 <= threshold <= 1.0:
+        raise argparse.ArgumentTypeError("similarity threshold must be between 0 and 1.")
+    return threshold
+
+
 def build_parser() -> argparse.ArgumentParser:
     """构造命令行参数解析器。
 
@@ -133,6 +160,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--select-region",
+        default=True,
         action="store_true",
         help="通过鼠标拖拽框选捕获区域（与 --region 互斥）",
     )
@@ -151,6 +179,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="离线 TTS（vits）模型路径，使用 --tts vits 时必须指定",
     )
+    parser.add_argument(
+        "--frame-similarity",
+        type=_parse_similarity_threshold,
+        default=DEFAULT_FRAME_SIMILARITY_THRESHOLD,
+        help=f"帧相似度缓存阈值，当前帧与上一帧相似度≥该值即跳过处理（默认 {DEFAULT_FRAME_SIMILARITY_THRESHOLD}）",
+    )
+    parser.add_argument(
+        "--frame-similarity-step",
+        type=int,
+        default=DEFAULT_FRAME_SIMILARITY_STEP,
+        help=f"帧相似度比对的像素降采样步长（默认 {DEFAULT_FRAME_SIMILARITY_STEP}）",
+    )
     return parser
 
 
@@ -167,6 +207,8 @@ def parse_args(argv: list[str] | None = None) -> AppConfig:
     args = parser.parse_args(argv)
     if args.fps <= 0:
         parser.error("--fps must be a positive integer.")
+    if args.frame_similarity_step <= 0:
+        parser.error("--frame-similarity-step must be a positive integer.")
     if args.select_region and args.region is not None:
         parser.error("--region and --select-region are mutually exclusive.")
 
@@ -191,4 +233,6 @@ def parse_args(argv: list[str] | None = None) -> AppConfig:
         voice=args.voice,
         tts_model_path=args.tts_model_path,
         verbose=args.verbose,
+        frame_similarity_threshold=args.frame_similarity,
+        frame_similarity_step=args.frame_similarity_step,
     )
