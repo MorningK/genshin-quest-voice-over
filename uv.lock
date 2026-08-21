@@ -19,8 +19,7 @@ conflicts = [[
 ]]
 
 [manifest]
-overrides = [{ package = { name = "rapidocr" }, dependencies = [{ name = "opencv-python-headless", specifier = ">=4.10.0" }] }]
-excludes = [{ package = { name = "rapidocr" }, dependencies = ["opencv-python"] }]
+excludes = ["opencv-python"]
 
 [[package]]
 name = "aiohappyeyeballs"
@@ -1959,7 +1958,6 @@ dependencies = [
     { name = "colorlog" },
     { name = "numpy" },
     { name = "omegaconf" },
-    { name = "opencv-python-headless" },
     { name = "pillow" },
     { name = "pyclipper" },
     { name = "pyyaml" },

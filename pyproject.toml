@@ -89,13 +89,12 @@ conflicts = [
 
 # rapidocr 硬依赖 opencv-python（GUI 版），其需要 libxcb/libGL 等 X11 系统库，
 # 在 Vercel 等无显示环境的 serverless 上会因缺 libxcb.so.1 而导入失败。
-# 这里将 rapidocr 的 opencv-python（GUI 版）依赖排除，改为用
-# opencv-python-headless（无 GUI/X11 依赖）满足其 cv2 需求。
-override-dependencies = [
-    { package = { name = "rapidocr" }, dependencies = ["opencv-python-headless>=4.10.0"] },
-]
+# 这里全局排除 GUI 版 opencv-python，改用基础依赖中的 opencv-python-headless
+# （无 GUI/X11 依赖）提供 cv2，满足 rapidocr 的运行需求。
+# 注意：使用字符串形式（PEP 508），兼容 Vercel 构建用的 uv 0.10.x；
+#       对象形式（{ package = ... }）是 uv 0.11+ 才支持的语法，旧版会解析失败。
 exclude-dependencies = [
-    { package = { name = "rapidocr" }, dependencies = ["opencv-python"] },
+    "opencv-python",
 ]
 
 # ============================================
