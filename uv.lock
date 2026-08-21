@@ -691,7 +691,14 @@ name = "genshin-quest-voice-over"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "edge-tts" },
+    { name = "fastapi" },
     { name = "numpy" },
+    { name = "onnxruntime" },
+    { name = "opencv-python-headless" },
+    { name = "python-multipart" },
+    { name = "rapidocr" },
+    { name = "uvicorn" },
 ]
 
 [package.optional-dependencies]
@@ -736,19 +743,26 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "dxcam", marker = "extra == 'capture'", specifier = ">=0.0.6" },
+    { name = "edge-tts", specifier = ">=6.1.0" },
     { name = "edge-tts", marker = "extra == 'tts-online'", specifier = ">=6.1.0" },
+    { name = "fastapi", specifier = ">=0.115.0" },
     { name = "fastapi", marker = "extra == 'web'", specifier = ">=0.115.0" },
     { name = "miniaudio", marker = "extra == 'playback'", specifier = ">=1.71" },
     { name = "mss", marker = "extra == 'capture'", specifier = ">=9.0.1" },
     { name = "numpy", specifier = ">=2.5.1" },
+    { name = "onnxruntime", specifier = ">=1.28.0" },
     { name = "onnxruntime", marker = "extra == 'ocr-rapid'", specifier = ">=1.28.0" },
     { name = "onnxruntime-gpu", marker = "extra == 'ocr-rapid-gpu'", specifier = ">=1.28.0" },
+    { name = "opencv-python-headless", specifier = ">=4.10.0" },
     { name = "opencv-python-headless", marker = "extra == 'ocr-preprocess'", specifier = ">=4.10.0" },
     { name = "paddleocr", marker = "extra == 'ocr'", specifier = ">=3.0.0" },
     { name = "paddlepaddle", marker = "extra == 'ocr'", specifier = ">=3.0.0" },
+    { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "python-multipart", marker = "extra == 'web'", specifier = ">=0.0.9" },
+    { name = "rapidocr", specifier = ">=3.9.2" },
     { name = "rapidocr", marker = "extra == 'ocr-rapid'", specifier = ">=3.9.2" },
     { name = "rapidocr", marker = "extra == 'ocr-rapid-gpu'", specifier = ">=3.9.2" },
+    { name = "uvicorn", specifier = ">=0.30.0" },
     { name = "uvicorn", marker = "extra == 'web'", specifier = ">=0.30.0" },
 ]
 provides-extras = ["capture", "ocr", "ocr-rapid", "ocr-rapid-gpu", "tts-online", "tts-offline", "ocr-preprocess", "playback", "web"]

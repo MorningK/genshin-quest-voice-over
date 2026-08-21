@@ -4,8 +4,22 @@ version = "0.1.0"
 description = "Genshin Impact quest dialogue voice-over generation system"
 readme = "README.md"
 requires-python = ">=3.12"
+# 基础运行依赖：含 Web 服务（FastAPI+SSE）与 OCR/TTS 引擎运行时。
+# 说明：Web 服务（server.py）需在 Vercel 上运行，Vercel 仅安装 [project].dependencies
+#       中的依赖（不安装可选组），故将 Web/OCR/TTS 运行时依赖全部置于此处，
+#       以确保 Vercel 原生打包时能正确装入并随函数 bundle 分发。
 dependencies = [
+    # 图像处理与 OCR（RapidOCR，默认后端）
     "numpy>=2.5.1",
+    "onnxruntime>=1.28.0",
+    "rapidocr>=3.9.2",
+    "opencv-python-headless>=4.10.0",
+    # 流式 TTS（Edge TTS，默认后端）
+    "edge-tts>=6.1.0",
+    # Web 服务（FastAPI + SSE）
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]

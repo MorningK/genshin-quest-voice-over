@@ -127,7 +127,7 @@ uv run uvicorn server:app --host 0.0.0.0 --port 8000
 
 ### 部署到 Vercel
 
-仓库根目录的 `server.py` 暴露 `app = FastAPI()`，Vercel 会自动识别其为入口；配套的 `requirements.txt`（依赖清单）与 `vercel.json`（函数与安装命令配置）已就绪。
+仓库根目录的 `server.py` 暴露 `app = FastAPI()`，Vercel 会自动识别其为入口；Web/OCR/TTS 运行时依赖已置于 `pyproject.toml` 的 `[project].dependencies`，配套的 `vercel.json`（函数配置）已就绪。
 
 ```bash
 # 安装 Vercel CLI
@@ -142,7 +142,7 @@ vercel deploy    # 部署到生产
 
 注意事项：
 
-- **依赖安装**：Vercel 会优先读取 `pyproject.toml` 且只安装 `[project].dependencies`（本仓库仅 `numpy`），可选依赖组不会被安装，`requirements.txt` 会被忽略，导致 `fastapi` 缺失。因此 `vercel.json` 通过 `installCommand: python -m pip install -r requirements.txt` 强制按 `requirements.txt` 装入全部运行时依赖（fastapi/uvicorn/python-multipart/onnxruntime/rapidocr/edge-tts/opencv-python-headless）。请勿移除该字段。
+- **依赖安装**：Vercel 会优先读取 `pyproject.toml` 且只安装 `[project].dependencies`，不安装可选依赖组。因此 Web/OCR/TTS 运行时依赖（fastapi/uvicorn/python-multipart/numpy/onnxruntime/rapidocr/edge-tts/opencv-python-headless）已统一放入 `[project].dependencies`，确保 Vercel 原生安装并随函数 bundle 正确分发。`vercel.json` 不再需要 `installCommand`。注意：依赖必须位于 `[project].dependencies`，否则 Vercel 虽然能构建，但运行时无法导入（如 `ModuleNotFoundError: No module named 'rapidocr'`）。
 
 - **启用 Large Functions（必须）**：本服务打包体积（依赖 onnxruntime/opencv/rapidocr 等约 500MB）超过 Vercel 标准函数上限，会导致 `Total bundle size ... exceeds the maximum function size` 部署失败。需在 Vercel 项目 **Settings → Environment Variables** 中新增环境变量：
   ```text
