@@ -19,6 +19,7 @@ import json
 import logging
 import queue
 import threading
+import traceback
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -351,8 +352,13 @@ def _run_worker(request: VoiceRequest, event_queue: queue.Queue[tuple[str, dict[
         )
         _put_event(event_queue, ("done", {"text": cleaned}))
     except Exception as exc:  # noqa: BLE001 - 跨线程传递异常，交由 SSE 端转为 error 事件
-        logger.error("Worker failed: %s", exc)
-        _put_event(event_queue, ("error", {"detail": str(exc)}))
+        # 记录完整 traceback（含 __cause__ 链），便于在 Vercel 日志中定位根因
+        logger.error("Worker failed:\n%s", "".join(traceback.format_exception(exc)))
+        cause = exc.__cause__
+        detail = str(exc)
+        if cause is not None:
+            detail = f"{detail} (cause: {cause})"
+        _put_event(event_queue, ("error", {"detail": detail}))
     finally:
         event_queue.put(None)
 

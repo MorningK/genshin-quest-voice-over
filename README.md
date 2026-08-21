@@ -114,12 +114,14 @@ uv run python main.py --ocr paddle --gpu
 
 ### 本地运行
 
-需按依赖组安装 OCR 与 TTS 引擎后，用 uvicorn 启动：
+OCR/TTS 引擎运行时依赖已在 `[project].dependencies` 中；本地开发还需安装 `uvicorn`（可选组 `web`），用它启动：
 
 ```bash
-uv sync --extra ocr-rapid --extra tts-online --extra ocr-preprocess
+uv sync --extra web
 uv run uvicorn server:app --host 0.0.0.0 --port 8000
 ```
+
+> `uvicorn` 仅本地运行用，已从基础依赖移入可选组 `web`，避免打包进 Vercel 函数（Vercel 用自己的 ASGI 运行时加载 `app`，不需要 uvicorn）。
 
 浏览器打开 `http://localhost:8000` 即可使用。图片经 OCR 识别后优先使用对白带聚焦文本（`roi_text`，需安装 `ocr-preprocess`），为空时回退到全帧文本。
 
@@ -142,16 +144,27 @@ vercel deploy    # 部署到生产
 
 注意事项：
 
-- **依赖安装**：Vercel 会优先读取 `pyproject.toml` 且只安装 `[project].dependencies`，不安装可选依赖组。因此 Web/OCR/TTS 运行时依赖（fastapi/uvicorn/python-multipart/numpy/onnxruntime/rapidocr/edge-tts/opencv-python-headless）已统一放入 `[project].dependencies`，确保 Vercel 原生安装并随函数 bundle 正确分发。`vercel.json` 不再需要 `installCommand`。注意：依赖必须位于 `[project].dependencies`，否则 Vercel 虽然能构建，但运行时无法导入（如 `ModuleNotFoundError: No module named 'rapidocr'`）。
+- **依赖安装**：Vercel 会优先读取 `pyproject.toml` 且只安装 `[project].dependencies`，不安装可选依赖组。因此 Web/OCR/TTS 运行时依赖（fastapi/python-multipart/numpy/onnxruntime/rapidocr/edge-tts/opencv-python-headless）已统一放入 `[project].dependencies`，确保 Vercel 原生安装并随函数 bundle 正确分发；`uvicorn` 仅本地开发用，保留在可选组 `web` 中、不打包进 Vercel。`vercel.json` 不再需要 `installCommand`。注意：依赖必须位于 `[project].dependencies`，否则 Vercel 虽然能构建，但运行时无法导入（如 `ModuleNotFoundError: No module named 'rapidocr'`）。
 
-- **启用 Large Functions（必须）**：本服务打包体积（依赖 onnxruntime/opencv/rapidocr 等约 500MB）超过 Vercel 标准函数上限，会导致 `Total bundle size ... exceeds the maximum function size` 部署失败。需在 Vercel 项目 **Settings → Environment Variables** 中新增环境变量：
-  ```text
-  VERCEL_SUPPORT_LARGE_FUNCTIONS = 1
-  ```
-  该变量启用 Vercel 的 **Large Functions**（Fluid Compute，上限 5GB），使大体积 Python 函数可正常部署。此变量**无法通过 `vercel.json` 配置**，必须在项目设置中手动添加。`vercel.json` 中已用 `functions.server.py.excludeFiles` 排除 `examples/`、`docs/` 等非必需文件以尽量缩减体积。
+- **启用 Large Functions（必须）**：本服务依赖 `onnxruntime`/`rapidocr`/`opencv` 等打包体积约 600MB+。若不启用 Large Functions，Vercel 会对 bundle 执行 **"optimizing dependencies"**，把 `onnxruntime`/`rapidocr` 等大体积原生依赖**从函数 bundle 中剔除**以压到标准上限内，导致部署成功但运行时 `ModuleNotFoundError: No module named 'rapidocr'`。因此必须启用 Large Functions（上限 5GB），让 bundle 走大函数路径、不被裁切。启用方式（均需在 Vercel 项目设置中手动配置，无法通过 `vercel.json` 完成）：
+  1. 项目 **Settings → General** 确认 **Fluid Compute** 已开启（新项目默认开启）。
+  2. 项目 **Settings → Environment Variables** 新增：`VERCEL_SUPPORT_LARGE_FUNCTIONS = 1`。
+  配置后需**重新部署**。若构建日志不再出现 "optimizing dependencies"（或 bundle 明显大于 500MB 且正常部署），即表示已生效。
 - **请求体上限（4.5MB）**：Vercel 函数请求/响应体最大 4.5MB，上传超大图片会报 `FUNCTION_PAYLOAD_TOO_LARGE`。前端已在 `static/index.html` 中对图片做**客户端压缩**（Canvas 等比缩放至最长边 1600px 并转 JPEG、逐档降质至约 3.5MB 以内），确保上传体积低于该限制；服务端 OCR 也会将图片降到最长边 1280px，不影响识别效果。若绕过前端直接调用 API，请自行控制图片体积。
 - `vercel.json` 为函数配置了 `maxDuration` 与 `memory`。SSE 长连接受函数 `maxDuration` 约束（Hobby 最高 60s），复杂 OCR + 多段语音的流式响应请确保在超时内完成。
 - Vercel serverless 冷启动较慢（首次加载 OCR/TTS 依赖与联网获取音色列表），且重度 OCR 模型与在线 TTS 在网络受限环境可能受限；生产场景建议以本地 `uvicorn` 或带常驻进程的平台为主，Vercel 作为轻量演示/分享入口。
+
+### OCR 运行时失败诊断
+
+若部署后上传图片返回 `event: error`，且错误含 `Failed to import rapidocr/onnxruntime: ...`，按下面的根因判读与应对排查（错误文案已透出原始 `ImportError` 原因，日志含完整 traceback）：
+
+| 错误中的根因 | 含义 | 应对 |
+| --- | --- | --- |
+| `No module named 'onnxruntime'` / `No module named 'rapidocr'` | 依赖被 Vercel "optimizing dependencies" 从函数 bundle 剔除 | 确认 Large Functions 完整生效（`VERCEL_SUPPORT_LARGE_FUNCTIONS=1` + Fluid Compute + Active CPU）后重新部署 |
+| `libgomp.so.1: cannot open shared object file` 等 | Vercel 运行时镜像缺 `onnxruntime` 所需的系统库 | onnxruntime 依赖额外系统库，Vercel 镜像可能不满足；建议改用其它常驻平台或调整依赖 |
+| 其它 `cannot open shared object` / `undefined symbol` | 原生库 ABI 与运行时环境不匹配 | 调整 `onnxruntime` 版本或改用其它部署平台 |
+
+> 提示：错误原因也会通过 SSE `error` 事件的 `detail` 字段返回（含 `cause:` 链），可在浏览器页面直接看到，无需仅依赖服务端日志。
 
 ## 代码结构
 

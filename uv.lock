@@ -698,7 +698,6 @@ dependencies = [
     { name = "opencv-python-headless" },
     { name = "python-multipart" },
     { name = "rapidocr" },
-    { name = "uvicorn" },
 ]
 
 [package.optional-dependencies]
@@ -728,8 +727,6 @@ tts-online = [
     { name = "edge-tts" },
 ]
 web = [
-    { name = "fastapi" },
-    { name = "python-multipart" },
     { name = "uvicorn" },
 ]
 
@@ -746,7 +743,6 @@ requires-dist = [
     { name = "edge-tts", specifier = ">=6.1.0" },
     { name = "edge-tts", marker = "extra == 'tts-online'", specifier = ">=6.1.0" },
     { name = "fastapi", specifier = ">=0.115.0" },
-    { name = "fastapi", marker = "extra == 'web'", specifier = ">=0.115.0" },
     { name = "miniaudio", marker = "extra == 'playback'", specifier = ">=1.71" },
     { name = "mss", marker = "extra == 'capture'", specifier = ">=9.0.1" },
     { name = "numpy", specifier = ">=2.5.1" },
@@ -758,11 +754,9 @@ requires-dist = [
     { name = "paddleocr", marker = "extra == 'ocr'", specifier = ">=3.0.0" },
     { name = "paddlepaddle", marker = "extra == 'ocr'", specifier = ">=3.0.0" },
     { name = "python-multipart", specifier = ">=0.0.9" },
-    { name = "python-multipart", marker = "extra == 'web'", specifier = ">=0.0.9" },
     { name = "rapidocr", specifier = ">=3.9.2" },
     { name = "rapidocr", marker = "extra == 'ocr-rapid'", specifier = ">=3.9.2" },
     { name = "rapidocr", marker = "extra == 'ocr-rapid-gpu'", specifier = ">=3.9.2" },
-    { name = "uvicorn", specifier = ">=0.30.0" },
     { name = "uvicorn", marker = "extra == 'web'", specifier = ">=0.30.0" },
 ]
 provides-extras = ["capture", "ocr", "ocr-rapid", "ocr-rapid-gpu", "tts-online", "tts-offline", "ocr-preprocess", "playback", "web"]
