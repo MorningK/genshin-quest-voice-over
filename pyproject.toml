@@ -87,6 +87,17 @@ conflicts = [
     [{ extra = "ocr-rapid" }, { extra = "ocr-rapid-gpu" }],
 ]
 
+# rapidocr 硬依赖 opencv-python（GUI 版），其需要 libxcb/libGL 等 X11 系统库，
+# 在 Vercel 等无显示环境的 serverless 上会因缺 libxcb.so.1 而导入失败。
+# 这里将 rapidocr 的 opencv-python（GUI 版）依赖排除，改为用
+# opencv-python-headless（无 GUI/X11 依赖）满足其 cv2 需求。
+override-dependencies = [
+    { package = { name = "rapidocr" }, dependencies = ["opencv-python-headless>=4.10.0"] },
+]
+exclude-dependencies = [
+    { package = { name = "rapidocr" }, dependencies = ["opencv-python"] },
+]
+
 # ============================================
 # Ruff 配置 — 代码格式化和静态检查
 # ============================================
