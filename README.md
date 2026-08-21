@@ -97,6 +97,54 @@ uv run python main.py --ocr paddle --gpu
 
 按 `Ctrl+C` 优雅停止并释放资源。
 
+## Web 服务（FastAPI + SSE）
+
+项目同时提供一个基于 FastAPI 的 Web 服务（`server.py`），通过 SSE（Server-Sent Events）接口接收前端上传的图片与可选参数，对图片执行 OCR 识别，并在同一 SSE 流中返回识别文本与流式 TTS 语音，处理流程与桌面端 `pipeline.py` 对齐。
+
+### 接口说明
+
+| 接口 | 方法 | 说明 |
+|------|------|------|
+| `/` | GET | 前端页面（上传图片 + 参数配置 + 边收边播） |
+| `/api/voice` | POST | SSE 流式接口，multipart 上传 `image`，可选 `language`/`voice`/`rate`/`ocr_backend`/`tts_backend` 表单字段 |
+| `/api/voices` | GET | 返回当前 TTS 引擎支持的音色列表 |
+| `/health` | GET | 健康检查 |
+
+`/api/voice` 事件流：`event: text`（识别结果 JSON）→ 多个 `event: audio`（base64 编码的 MP3 分片）→ `event: done`；出错时下发 `event: error`。
+
+### 本地运行
+
+需按依赖组安装 OCR 与 TTS 引擎后，用 uvicorn 启动：
+
+```bash
+uv sync --extra ocr-rapid --extra tts-online --extra ocr-preprocess
+uv run uvicorn server:app --host 0.0.0.0 --port 8000
+```
+
+浏览器打开 `http://localhost:8000` 即可使用。图片经 OCR 识别后优先使用对白带聚焦文本（`roi_text`，需安装 `ocr-preprocess`），为空时回退到全帧文本。
+
+> 服务端引擎采用懒加载 + 单例缓存，首次请求时初始化、之后跨请求复用，降低冷启动成本。
+
+### 部署到 Vercel
+
+仓库根目录的 `server.py` 暴露 `app = FastAPI()`，Vercel 会自动识别其为入口；配套的 `requirements.txt`（依赖清单）与 `vercel.json`（函数配置）已就绪。
+
+```bash
+# 安装 Vercel CLI
+npm i -g vercel
+
+# 在项目根目录
+vercel           # 本地预览
+vercel deploy    # 部署到生产
+```
+
+或在 [Vercel Dashboard](https://vercel.com) 中连接本仓库直接导入。
+
+注意事项：
+
+- `vercel.json` 已启用 `fluid`（Fluid compute）以放宽打包大小上限，并配置 `maxDuration`/`memory`。SSE 长连接受函数 `maxDuration` 约束（Hobby 最高 60s），复杂 OCR + 多段语音的流式响应请确保在超时内完成。
+- Vercel serverless 冷启动较慢（首次加载 OCR/TTS 依赖与联网获取音色列表），且重度 OCR 模型与在线 TTS 在网络受限环境可能受限；生产场景建议以本地 `uvicorn` 或带常驻进程的平台为主，Vercel 作为轻量演示/分享入口。
+
 ## 代码结构
 
 ```

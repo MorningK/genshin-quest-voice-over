@@ -44,6 +44,12 @@ ocr-preprocess = [
 playback = [
     "miniaudio>=1.71",
 ]
+# Web 服务（FastAPI + SSE）：图片 OCR 识别 + 流式 TTS 语音合成
+web = [
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
+    "python-multipart>=0.0.9",
+]
 
 [dependency-groups]
 dev = [
@@ -51,6 +57,13 @@ dev = [
     "pyrefly>=1.2.0",
     "ruff>=0.15.14",
 ]
+
+# ============================================
+# Vercel 部署配置 — FastAPI 入口
+# ============================================
+[tool.vercel]
+# 声明 FastAPI 实例入口：在 ./server.py 中查找名为 `app` 的应用
+entrypoint = "server:app"
 
 # ============================================
 # uv 配置 — 可选依赖组互斥声明
