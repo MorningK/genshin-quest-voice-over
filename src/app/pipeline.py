@@ -287,16 +287,17 @@ class VoiceOverApp:
                 next_time = time.perf_counter()
 
     def _frame_skipped(self, current: np.ndarray) -> bool:
-        """判断当前帧是否与上一帧相同或高度相似，应跳过本次处理。
+        """判断当前帧是否与上一帧完全一致，应跳过本次处理。
 
-        先比对缓存是否存在与两帧尺寸是否一致，再通过降采样均值绝对差度量相似度；
-        完全一致时直接短路返回 True，避免执行昂贵的均值计算。
+        仅对像素完全一致的帧跳过，避免全帧平均差异把局部字幕变化稀释掉、
+        导致新对白被误跳过而漏读。比对前先按步长降采样，既节省内存，
+        也能容忍捕获后端偶发的轻微像素噪声；任一像素不同即视为画面有变化。
 
         Args:
             current: 当前帧图像（numpy uint8 BGR 数组）。
 
         Returns:
-            True 表示当前帧与上一帧相同或高度相似，应跳过后续处理。
+            True 表示当前帧与上一帧完全一致，应跳过后续处理。
         """
         last = self._last_frame
         step = self._config.frame_similarity_step
@@ -304,15 +305,7 @@ class VoiceOverApp:
             return False
         if last.shape != current[::step, ::step].shape:
             return False
-        if np.array_equal(last, current[::step, ::step]):
-            return True
-        # 计算降采样帧的均值绝对差并映射为相似度（BGR 0~255 灰度范围）
-        mad = np.abs(current[::step, ::step].astype(np.float32) - last).mean()
-        similarity = 1.0 - mad / 255.0
-        if similarity >= self._config.frame_similarity_threshold:
-            logger.debug("Frame skipped, similarity=%.4f", similarity)
-            return True
-        return False
+        return bool(np.array_equal(last, current[::step, ::step]))
 
     def _process_frame(self) -> None:
         """执行单帧处理：捕获、识别、判断变化并合成播放。"""
@@ -326,17 +319,20 @@ class VoiceOverApp:
         capture_elapsed = (time.perf_counter() - step_start) * 1000
         logger.debug("Step [capture] took %.1f ms", capture_elapsed)
 
-        # 帧相似度缓存：与上一帧相同或高度相似时跳过 OCR 及后续处理，降低无效计算
+        # 帧缓存：与上一帧完全一致时跳过 OCR 及后续处理，降低无效计算
         if self._frame_skipped(result.image):
             return
-        # 仅缓存降采样副本，节省内存；copy 避免后端复用缓冲导致比对失真
+        # 计算降采样候选帧副本（copy 避免后端复用缓冲导致比对失真），
+        # 但延迟到 recognize 成功后提交，OCR 临时失败时不更新缓存以便下次重试。
         step = self._config.frame_similarity_step
-        self._last_frame = result.image[::step, ::step].copy()
+        candidate_frame = result.image[::step, ::step].copy()
 
         step_start = time.perf_counter()
         recognition = self._recognizer.recognize(result.image)
         recognize_elapsed = (time.perf_counter() - step_start) * 1000
         logger.debug("Step [recognize] took %.1f ms", recognize_elapsed)
+        # 仅在识别成功后提交缓存；识别抛出异常时保持未更新，相同帧可再次尝试识别
+        self._last_frame = candidate_frame
 
         # 优先使用聚焦后的对白带文本（已剔除右侧选项菜单/性能数据等 UI 噪声），
         # 为空时回退到全帧文本，保证无 ROI 预处理时行为不变
