@@ -148,7 +148,7 @@ class TextTracker:
         if not cleaned or is_noise(cleaned):
             return None
 
-        # 单条文本若命中游戏 UI 噪声规则（手柄按键提示/性能数据/UID 等），跳过
+        # 单条文本若命中游戏 UI 噪声规则 (手柄按键提示/性能数据/UID 等), 跳过
         if filter_ui_noise(cleaned) is None:
             return None
 

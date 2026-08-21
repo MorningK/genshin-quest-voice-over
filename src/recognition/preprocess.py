@@ -29,8 +29,8 @@ _DIALOGUE_BAND_RATIO = 0.35
 # 右侧选项菜单通常位于捕获区域右半部分；其 x 中心占比高于此值视为菜单噪声
 _OPTION_MENU_X_RATIO = 0.62
 
-# NPC 名字标签通常紧贴对白带上方、字体更大且呈橙色；
-# 当单个文本框高度超过对白文本典型高度过多时视为名字标签噪声
+# NPC 名字标签通常紧贴对话带上方、字体更大且呈橙色；
+# 当单个文本框高度超过对话文本典型高度过多时视为名字标签噪声
 _NAME_TAG_MAX_HEIGHT = 80
 
 # 字幕最小高度阈值：低于此值的碎片多半为装饰性 UI 元素（如分隔符、图标）
@@ -67,26 +67,32 @@ def _box_height(box: RecognitionBox) -> int:
     return max(ys) - min(ys)
 
 
-def preprocess_frame(frame: object, region: Region | None = None) -> object:
+def preprocess_frame(
+    frame: object, region: Region | None = None, max_output_size: int | None = None
+) -> tuple[object, bool]:
     """对送入 OCR 前的图像做增强与缩放归一。
 
     依次执行：BGR→灰度、CLAHE 对比度增强、轻度放大（长边归一到
     1920 以提升小字识别率）。所有 OpenCV 调用受惰性导入保护，缺依赖
-    或输入非 numpy 数组时原样返回，不影响既有行为。
+    或输入非 numpy 数组时返回原图并标记 applied=False，不影响既有行为。
 
     Args:
         frame: 捕获图像（numpy 数组或文件字节）。
         region: 捕获区域坐标，用于决定归一化目标尺寸；为 None 时按全图长边处理。
+        max_output_size: 增强后长边的最大像素上限；传入时放大目标受此值约束，
+            用于避免突破 OCR 后端的输入尺寸限制（如 PaddleOCR 的 _MAX_INPUT_SIZE）。
 
     Returns:
-        增强后的图像；无法处理时返回原始 frame。
+        二元组 (enhanced, applied)：enhanced 为增强后的图像，applied 表示是否
+        真正执行了预处理。缺依赖或无法处理时返回 (frame, False)，调用方应据此
+        跳过 roi_text 生成以保留全帧文本回退语义。
     """
     if np is None or not isinstance(frame, np.ndarray):
-        return frame
+        return frame, False
     try:
-        import cv2  # 惰性导入：缺 opencv-python-headless 依赖组时直接降级
+        import cv2  # 惰性导入: 缺 opencv-python-headless 依赖组时直接降级
     except ImportError:
-        return frame
+        return frame, False
 
     image = frame
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
@@ -96,11 +102,14 @@ def preprocess_frame(frame: object, region: Region | None = None) -> object:
     enhanced = clahe.apply(gray)
 
     # 轻度放大：原神字幕字号偏小，放大可显著改善小字召回率；
-    # 长边归一目标随捕获区域宽度自适应，避免无谓的过度放大
+    # 长边归一目标随捕获区域宽度自适应，避免无谓的过度放大。
+    # 传入 max_output_size 时，放大目标同时受该上限约束，不超过 OCR 后端限制。
     target_long = 1920
     if region is not None:
         capture_long = max(region.right - region.left, region.bottom - region.top)
         target_long = max(target_long, capture_long)
+    if max_output_size is not None:
+        target_long = min(target_long, max_output_size)
     height, width = enhanced.shape[:2]
     long_side = max(height, width)
     if long_side < target_long:
@@ -109,7 +118,7 @@ def preprocess_frame(frame: object, region: Region | None = None) -> object:
         new_w = max(1, round(width * scale))
         enhanced = cv2.resize(enhanced, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
 
-    return enhanced
+    return enhanced, True
 
 
 def extract_dialogue_boxes(
