@@ -36,6 +36,10 @@ _NAME_TAG_MAX_HEIGHT = 80
 # 字幕最小高度阈值：低于此值的碎片多半为装饰性 UI 元素（如分隔符、图标）
 _DIALOGUE_MIN_HEIGHT = 8
 
+# 送入 OCR 的图像最大边长上限。过大的输入（如 4K 全屏帧）会显著拉高推理耗时与
+# CPU/GPU 资源占用，进而与游戏抢占性能；对字幕场景，限制边长后不影响识别准确率。
+DEFAULT_MAX_INPUT_SIZE = 1280
+
 
 def _center_x(box: RecognitionBox) -> int:
     """计算识别区域的水平中心 x 坐标。
@@ -65,6 +69,40 @@ def _box_height(box: RecognitionBox) -> int:
         return 0
     ys = [p.y for p in box.points]
     return max(ys) - min(ys)
+
+
+def downscale_to_max_side(image: object, max_side: int) -> object:
+    """将图像等比缩放，使最长边不超过上限，降低送入 OCR 的推理计算量。
+
+    采用最近邻插值（纯 numpy 实现，不依赖 OpenCV），避免引入额外依赖。
+    过大的输入（如全屏帧）会显著拉高 OCR 推理耗时与 CPU/GPU 资源占用，
+    限制边长后像素量线性下降，对字幕场景不影响识别准确率。
+
+    Args:
+        image: 输入的 BGR 图像（numpy 数组或文件字节）。
+        max_side: 缩放后最长边的像素上限。
+
+    Returns:
+        缩放后的图像；非 numpy 输入或最长边本就未超过上限时原样返回。
+
+    Raises:
+        ValueError: 输入 numpy 数组为空时抛出。
+    """
+    if np is None or not isinstance(image, np.ndarray):
+        return image
+    if image.size == 0:
+        raise ValueError("Input image is empty.")
+    height, width = image.shape[:2]
+    long_side = max(height, width)
+    if long_side <= max_side:
+        return image
+
+    scale = max_side / long_side
+    new_h = max(1, round(height * scale))
+    new_w = max(1, round(width * scale))
+    y = np.clip((np.arange(new_h) * height // new_h), 0, height - 1)
+    x = np.clip((np.arange(new_w) * width // new_w), 0, width - 1)
+    return image[y][:, x]
 
 
 def preprocess_frame(
