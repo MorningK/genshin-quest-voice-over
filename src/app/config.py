@@ -64,7 +64,11 @@ class AppConfig:
             RecognitionConfig 对象，语言由 AppConfig.language 决定，
             GPU 加速由 AppConfig.use_gpu 决定。
         """
-        return RecognitionConfig(language=self.language, use_gpu=self.use_gpu)
+        return RecognitionConfig(
+            language=self.language,
+            use_gpu=self.use_gpu,
+            capture_region=self.region,
+        )
 
     def to_tts_config(self) -> TTSConfig:
         """转换为 TTS 合成配置。

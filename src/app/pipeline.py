@@ -299,8 +299,12 @@ class VoiceOverApp:
         recognize_elapsed = (time.perf_counter() - step_start) * 1000
         logger.debug("Step [recognize] took %.1f ms", recognize_elapsed)
 
+        # 优先使用聚焦后的对白带文本（已剔除右侧选项菜单/性能数据等 UI 噪声），
+        # 为空时回退到全帧文本，保证无 ROI 预处理时行为不变
+        dialogue_text = recognition.roi_text or recognition.text
+
         step_start = time.perf_counter()
-        request = self._tracker.should_play(recognition.text)
+        request = self._tracker.should_play(dialogue_text)
         track_elapsed = (time.perf_counter() - step_start) * 1000
         logger.debug("Step [track] took %.1f ms", track_elapsed)
         if request is None:

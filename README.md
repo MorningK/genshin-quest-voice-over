@@ -34,6 +34,7 @@ uv sync
 | OCR GPU（RapidOCR 备选） | `ocr-rapid-gpu` | `uv sync --extra ocr-rapid-gpu` |
 | TTS（Edge TTS 在线） | `tts-online` | `uv sync --extra tts-online` |
 | 播放（流式播放 + 非 WAV 解码） | `playback` | `uv sync --extra playback` |
+| OCR 预处理（图像增强 + 字幕区域聚焦） | `ocr-preprocess` | `uv sync --extra ocr-preprocess` |
 
 激活单个组可用 `uv sync --extra capture --extra ocr-rapid --extra tts-online --extra playback`，或一次性激活全部用 `uv sync --all-extras`。
 > 注意：`ocr-rapid`（CPU）与 `ocr-rapid-gpu`（GPU）互斥，uv 已声明二者为冲突组，`--all-extras` 会因同时激活两者而报错。GPU 场景请勿使用 `--all-extras`，改为显式指定 GPU 组（见下方「GPU 加速」）。
@@ -59,6 +60,8 @@ OCR 识别默认在 CPU 上运行，可通过 `--gpu` 开关启用 GPU 推理加
 > 注意：Edge TTS 输出 MP3，需激活 `playback` 组（miniaudio）才能播放；激活后使用 miniaudio 流式播放（边合成边播放），未激活时非 WAV 音频（如 Edge TTS 的 MP3）会被跳过播放。
 
 > 隐私提示：使用 Edge TTS（在线 TTS）时，从屏幕捕获并经 OCR 识别出的文本会通过网络发送至微软 Edge TTS API 进行语音合成。若对隐私敏感，请使用离线 TTS（VITS）后端。
+
+> 字幕区域聚焦：安装 `ocr-preprocess` 依赖组（OpenCV）后，OCR 前会做灰度/对比度增强与轻度放大，并从识别结果中聚焦画面底部对白带文本，自动剔除右侧选项菜单、右上性能数据（FPS/GPU）、手柄按键提示（如 `X 播放中`）、UID 等 UI 噪声，仅朗读玩家实际看到的对话内容；`「」`/`《》` 包裹的 NPC 名字标签也会被过滤。缺依赖组时自动降级为全屏文本，不影响既有行为。
 
 ## 运行
 

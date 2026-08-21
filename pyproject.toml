@@ -37,6 +37,10 @@ tts-online = [
 ]
 # TTS 离线备选：VITS（仅骨架，需额外模型与推理依赖）
 tts-offline = []
+# OCR 预处理：图像增强与字幕区域聚焦（缺依赖时自动降级，不影响既有行为）
+ocr-preprocess = [
+    "opencv-python-headless>=4.10.0",
+]
 playback = [
     "miniaudio>=1.71",
 ]

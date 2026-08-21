@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from src.common import Point
+from src.common import Point, Region
 
 
 @dataclass
@@ -22,6 +22,7 @@ class RecognitionConfig:
         use_gpu: 是否使用 GPU 加速。
         model_dir: 自定义模型目录路径，None 表示使用默认模型。
         enable_text_direction: 是否启用文字方向检测（横排/竖排）。
+        capture_region: 捕获区域坐标，用于推导底部对白带 ROI 以聚焦对话文本；None 表示全屏。
     """
 
     language: str = "ch"
@@ -29,6 +30,7 @@ class RecognitionConfig:
     use_gpu: bool = False
     model_dir: str | None = None
     enable_text_direction: bool = False
+    capture_region: Region | None = None
 
 
 @dataclass
@@ -56,6 +58,7 @@ class RecognitionResult:
         boxes: 按阅读顺序排列的各文字区域列表。
         timestamp: 识别完成时间戳（Unix 秒）。
         language_detected: 实际检测到的语言。
+        roi_text: 聚焦底部对白带后的对话文本；不含右侧选项菜单、右上性能数据、名字标签等 UI 噪声。
     """
 
     text: str = ""
@@ -63,6 +66,7 @@ class RecognitionResult:
     boxes: list[RecognitionBox] = field(default_factory=list)
     timestamp: float = 0.0
     language_detected: str = ""
+    roi_text: str = ""
 
 
 # 判断两个区域是否同行的垂直重叠比例阈值

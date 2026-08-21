@@ -15,6 +15,7 @@ import numpy as np
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
+from src.app.textproc import filter_ui_noise
 from src.common import Point
 from src.recognition.base import (
     RecognitionBox,
@@ -23,6 +24,7 @@ from src.recognition.base import (
     TextRecognizer,
     sort_boxes_reading_order,
 )
+from src.recognition.preprocess import extract_dialogue_boxes, preprocess_frame
 
 logger = logging.getLogger(__name__)
 
@@ -127,8 +129,12 @@ class PaddleOCREngine(TextRecognizer):
             raise RuntimeError("PaddleOCR engine is not configured.")
 
         processed = self._downscale(image)
+        # 送入 OCR 前做灰度/对比度增强与轻度放大，提升小字号字幕召回率；
+        # 传入 max_output_size 约束增强后尺寸，不超过 PaddlePaddle 防崩溃上限 _MAX_INPUT_SIZE。
+        # 缺 OpenCV 时 preprocess_frame 返回 (processed, False), 不生成 roi_text
+        enhanced, applied = preprocess_frame(processed, self._config.capture_region, self._MAX_INPUT_SIZE)
         try:
-            results = self._engine.predict(processed)
+            results = self._engine.predict(enhanced)
         except Exception as exc:
             raise RuntimeError("Failed to recognize text with PaddleOCR.") from exc
 
@@ -167,12 +173,37 @@ class PaddleOCREngine(TextRecognizer):
         avg_confidence = sum(confidences) / len(confidences) if confidences else 0.0
         full_text = "".join(b.text for b in ordered_boxes)
 
+        # 聚焦底部对白带：剔除右侧选项菜单/右上性能数据/名字标签等 UI 噪声，
+        # 仅保留玩家实际看到的对话文本，提升后续朗读准确率。
+        # 仅当预处理真正生效（applied=True）时才生成 roi_text；
+        # 缺 OpenCV 时 applied=False，roi_text 置空，pipeline 回退到全帧文本。
+        roi_text = ""
+        if applied:
+            try:
+                import numpy as _np
+            except ImportError:
+                _np = None  # type: ignore[assignment]
+            image_shape = enhanced.shape[:2] if _np is not None and isinstance(enhanced, _np.ndarray) else None
+            roi_boxes = extract_dialogue_boxes(ordered_boxes, image_shape)
+            # 逐框过滤游戏 UI 噪声（UID/手柄提示等），命中噪声的框不计入 roi_text，
+            # 避免锚定模式在与其他文本同帧时无法匹配
+            roi_parts = [b.text for b in roi_boxes if filter_ui_noise(b.text) is not None]
+            roi_text = "".join(roi_parts)
+            if roi_boxes and len(roi_parts) != len(roi_boxes):
+                logger.debug(
+                    "ROI filtered %d/%d boxes, dialogue text: %s",
+                    len(roi_boxes) - len(roi_parts),
+                    len(roi_boxes),
+                    roi_text,
+                )
+
         return RecognitionResult(
             text=full_text,
             confidence=avg_confidence,
             boxes=ordered_boxes,
             timestamp=time.time(),
             language_detected=self._config.language,
+            roi_text=roi_text,
         )
 
     @staticmethod
