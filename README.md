@@ -127,7 +127,7 @@ uv run uvicorn server:app --host 0.0.0.0 --port 8000
 
 ### 部署到 Vercel
 
-仓库根目录的 `server.py` 暴露 `app = FastAPI()`，Vercel 会自动识别其为入口；配套的 `requirements.txt`（依赖清单）与 `vercel.json`（函数配置）已就绪。
+仓库根目录的 `server.py` 暴露 `app = FastAPI()`，Vercel 会自动识别其为入口；配套的 `requirements.txt`（依赖清单）与 `vercel.json`（函数与安装命令配置）已就绪。
 
 ```bash
 # 安装 Vercel CLI
@@ -142,7 +142,8 @@ vercel deploy    # 部署到生产
 
 注意事项：
 
-- `vercel.json` 已启用 `fluid`（Fluid compute）以放宽打包大小上限，并配置 `maxDuration`/`memory`。SSE 长连接受函数 `maxDuration` 约束（Hobby 最高 60s），复杂 OCR + 多段语音的流式响应请确保在超时内完成。
+- **依赖安装**：Vercel 会优先读取 `pyproject.toml` 且只安装 `[project].dependencies`（本仓库仅 `numpy`），可选依赖组不会被安装，`requirements.txt` 会被忽略，导致 `fastapi` 缺失。因此 `vercel.json` 通过 `installCommand: python -m pip install -r requirements.txt` 强制按 `requirements.txt` 装入全部运行时依赖（fastapi/uvicorn/python-multipart/onnxruntime/rapidocr/edge-tts/opencv-python-headless）。请勿移除该字段。
+- `vercel.json` 为函数配置了 `maxDuration` 与 `memory`。SSE 长连接受函数 `maxDuration` 约束（Hobby 最高 60s），复杂 OCR + 多段语音的流式响应请确保在超时内完成。
 - Vercel serverless 冷启动较慢（首次加载 OCR/TTS 依赖与联网获取音色列表），且重度 OCR 模型与在线 TTS 在网络受限环境可能受限；生产场景建议以本地 `uvicorn` 或带常驻进程的平台为主，Vercel 作为轻量演示/分享入口。
 
 ## 代码结构
