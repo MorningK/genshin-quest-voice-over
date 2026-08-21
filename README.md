@@ -143,6 +143,13 @@ vercel deploy    # 部署到生产
 注意事项：
 
 - **依赖安装**：Vercel 会优先读取 `pyproject.toml` 且只安装 `[project].dependencies`（本仓库仅 `numpy`），可选依赖组不会被安装，`requirements.txt` 会被忽略，导致 `fastapi` 缺失。因此 `vercel.json` 通过 `installCommand: python -m pip install -r requirements.txt` 强制按 `requirements.txt` 装入全部运行时依赖（fastapi/uvicorn/python-multipart/onnxruntime/rapidocr/edge-tts/opencv-python-headless）。请勿移除该字段。
+
+- **启用 Large Functions（必须）**：本服务打包体积（依赖 onnxruntime/opencv/rapidocr 等约 500MB）超过 Vercel 标准函数上限，会导致 `Total bundle size ... exceeds the maximum function size` 部署失败。需在 Vercel 项目 **Settings → Environment Variables** 中新增环境变量：
+  ```text
+  VERCEL_SUPPORT_LARGE_FUNCTIONS = 1
+  ```
+  该变量启用 Vercel 的 **Large Functions**（Fluid Compute，上限 5GB），使大体积 Python 函数可正常部署。此变量**无法通过 `vercel.json` 配置**，必须在项目设置中手动添加。`vercel.json` 中已用 `functions.server.py.excludeFiles` 排除 `examples/`、`docs/` 等非必需文件以尽量缩减体积。
+- **请求体上限（4.5MB）**：Vercel 函数请求/响应体最大 4.5MB，上传超大图片会报 `FUNCTION_PAYLOAD_TOO_LARGE`。前端已在 `static/index.html` 中对图片做**客户端压缩**（Canvas 等比缩放至最长边 1600px 并转 JPEG、逐档降质至约 3.5MB 以内），确保上传体积低于该限制；服务端 OCR 也会将图片降到最长边 1280px，不影响识别效果。若绕过前端直接调用 API，请自行控制图片体积。
 - `vercel.json` 为函数配置了 `maxDuration` 与 `memory`。SSE 长连接受函数 `maxDuration` 约束（Hobby 最高 60s），复杂 OCR + 多段语音的流式响应请确保在超时内完成。
 - Vercel serverless 冷启动较慢（首次加载 OCR/TTS 依赖与联网获取音色列表），且重度 OCR 模型与在线 TTS 在网络受限环境可能受限；生产场景建议以本地 `uvicorn` 或带常驻进程的平台为主，Vercel 作为轻量演示/分享入口。
 

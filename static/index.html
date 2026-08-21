@@ -164,7 +164,7 @@
     const healthDot = document.getElementById("healthDot");
     const healthText = document.getElementById("healthText");
 
-    let selectedFile = null;
+    let uploadFile = null;
 
     // 健康检查
     function checkHealth() {
@@ -205,21 +205,76 @@
 
     function handleFile(file) {
       if (!file.type.startsWith("image/")) { setStatus("仅支持图片文件", true); return; }
-      selectedFile = file;
-      fileInfo.textContent = file.name + " (" + (file.size / 1024).toFixed(1) + " KB)";
+      // 保留原始文件用于预览
       const reader = new FileReader();
       reader.onload = e => { preview.src = e.target.result; preview.style.display = "block"; };
       reader.readAsDataURL(file);
-      setStatus("已选择图片，点击开始识别");
+      fileInfo.textContent = "正在压缩…";
+      setStatus("正在压缩图片，请稍候");
+      // 压缩后作为上传文件（控制在 Vercel 4.5MB 请求体限制以内）
+      compressImage(file).then(function (blob) {
+        uploadFile = blob;
+        fileInfo.textContent = file.name + " → " + (blob.size / 1024).toFixed(1) + " KB";
+        setStatus("已选择图片，点击开始识别");
+      }).catch(function (err) {
+        setStatus("图片压缩失败：" + err.message, true);
+      });
+    }
+
+    // 用 Canvas 压缩图片：等比缩小 + JPEG 编码，逐步降质量直到体积足够小
+    function compressImage(file, maxSize) {
+      maxSize = maxSize || 3.5 * 1024 * 1024; // 目标上限 ~3.5MB，留安全余量低于 Vercel 4.5MB 限制
+      return new Promise(function (resolve, reject) {
+        const img = new Image();
+        const url = URL.createObjectURL(file);
+        img.onload = function () {
+          try {
+            // 等比限制最长边，避免超大分辨率；服务端 OCR 也会降到 1280，此处 1600 足够
+            const MAX_EDGE = 1600;
+            let w = img.width, h = img.height;
+            const long = Math.max(w, h);
+            if (long > MAX_EDGE) {
+              const scale = MAX_EDGE / long;
+              w = Math.round(w * scale);
+              h = Math.round(h * scale);
+            }
+            const canvas = document.createElement("canvas");
+            canvas.width = w; canvas.height = h;
+            const ctx = canvas.getContext("2d");
+            ctx.drawImage(img, 0, 0, w, h);
+            URL.revokeObjectURL(url);
+            // 用 toDataURL 同步编码为 JPEG，逐档降低质量直到体积足够小
+            const qualities = [0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3];
+            let dataUrl = null;
+            for (let i = 0; i < qualities.length; i++) {
+              dataUrl = canvas.toDataURL("image/jpeg", qualities[i]);
+              // 估算解码后字节数：base64 去掉 data 头后约 3/4 为字节数
+              const bytes = Math.floor(dataUrl.length * 0.75);
+              if (bytes <= maxSize) break;
+            }
+            if (!dataUrl) { reject(new Error("无法编码图片")); return; }
+            // data URL → Blob
+            const bin = atob(dataUrl.split(",")[1]);
+            const bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            resolve(new Blob([bytes], { type: "image/jpeg" }));
+          } catch (e) {
+            URL.revokeObjectURL(url);
+            reject(e);
+          }
+        };
+        img.onerror = function () { URL.revokeObjectURL(url); reject(new Error("无法读取图片")); };
+        img.src = url;
+      });
     }
 
     rateInput.addEventListener("input", () => { rateVal.textContent = rateInput.value + "x"; });
 
     // 提交
     submitBtn.addEventListener("click", () => {
-      if (!selectedFile) { setStatus("请先选择一张图片", true); return; }
+      if (!uploadFile) { setStatus("请先选择一张图片", true); return; }
       const form = new FormData();
-      form.append("image", selectedFile);
+      form.append("image", uploadFile);
       form.append("language", languageSel.value);
       form.append("ocr_backend", ocrBackend.value);
       form.append("tts_backend", ttsBackend.value);
