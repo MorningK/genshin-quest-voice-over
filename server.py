@@ -207,7 +207,7 @@ def list_voices() -> dict[str, Any]:
         return {"voices": engine.available_voices, "error": None}
     except Exception as exc:  # noqa: BLE001 - 返回友好错误信息而非中断请求
         logger.warning("Failed to list voices: %s", exc)
-        return {"voices": [], "error": str(exc)}
+        return {"voices": [], "error": "Failed to load voices"}
 
 
 @app.get("/", response_class=HTMLResponse, tags=["ui"])
