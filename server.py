@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, StreamingResponse
 
 from src.app.config import AppConfig
@@ -39,8 +39,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# 引擎懒加载单例缓存，键为 (kind, backend)
-_ENGINE_CACHE: dict[tuple[str, str], Any] = {}
+# 引擎懒加载单例缓存，键首元素为 kind（"ocr"/"tts"），其余为影响初始化的配置字段。
+# 不同初始化配置（如 language/voice/rate）对应独立引擎实例，避免首次请求固化配置。
+_ENGINE_CACHE: dict[tuple[Any, ...], Any] = {}
 _ENGINE_LOCK = threading.Lock()
 
 # 可选参数默认值，与 AppConfig 保持一致
@@ -49,6 +50,15 @@ _DEFAULT_VOICE = "zh-CN-XiaoxiaoNeural"
 
 # 提交到 SSE 生成器的最大队列长度，防止内存无界增长
 _MAX_QUEUE_SIZE = 64
+
+# 上传图片大小上限（4.5MB），与 Vercel 请求体硬限制对齐
+_MAX_UPLOAD_BYTES = 4_500_000
+
+# 分块读取上传的块大小
+_UPLOAD_CHUNK_SIZE = 1024 * 1024
+
+# 入队/取队列时的超时（秒），用于周期性检查取消信号
+_QUEUE_TIMEOUT = 0.5
 
 # 前端页面路径
 _FRONTEND_PATH = Path(__file__).parent / "static" / "index.html"
@@ -90,7 +100,17 @@ def _get_engine(kind: str, backend: str, config: AppConfig, tts_config: TTSConfi
     Raises:
         RuntimeError: 引擎初始化失败时抛出。
     """
-    key = (kind, backend)
+    if kind == "ocr":
+        # OCR 初始化仅受 language 与 use_gpu 影响，纳入缓存键避免不同语言复用同一实例
+        rec_config = config.to_recognition_config()
+        key: tuple[Any, ...] = ("ocr", backend, rec_config.language, rec_config.use_gpu)
+    elif kind == "tts":
+        init_config = tts_config if tts_config is not None else config.to_tts_config()
+        # TTS 初始化受 voice/rate/offline/model_path 影响，纳入缓存键
+        key = ("tts", backend, init_config.voice, init_config.rate, init_config.offline, init_config.model_path)
+    else:
+        raise RuntimeError(f"Unknown engine kind: {kind}")
+
     with _ENGINE_LOCK:
         cached = _ENGINE_CACHE.get(key)
         if cached is not None:
@@ -106,10 +126,10 @@ def _get_engine(kind: str, backend: str, config: AppConfig, tts_config: TTSConfi
                 engine = RapidOCREngine()
             else:
                 raise RuntimeError(f"Unknown OCR backend: {backend}")
-            if not engine.initialize(config.to_recognition_config()):
+            if not engine.initialize(rec_config):
                 raise RuntimeError(f"Failed to initialize OCR backend: {backend}")
             logger.info("OCR backend initialized: %s", backend)
-        elif kind == "tts":
+        else:
             from src.tts import EdgeTTSEngine, VITSEngine
 
             engine_t: TextToSpeech
@@ -119,14 +139,11 @@ def _get_engine(kind: str, backend: str, config: AppConfig, tts_config: TTSConfi
                 engine_t = VITSEngine()
             else:
                 raise RuntimeError(f"Unknown TTS backend: {backend}")
-            init_config = tts_config if tts_config is not None else config.to_tts_config()
             if not engine_t.initialize(init_config):
                 raise RuntimeError(f"Failed to initialize TTS backend: {backend}")
             logger.info("TTS backend initialized: %s", backend)
             _ENGINE_CACHE[key] = engine_t
             return engine_t
-        else:
-            raise RuntimeError(f"Unknown engine kind: {kind}")
 
         _ENGINE_CACHE[key] = engine
         return engine
@@ -136,7 +153,7 @@ def _release_engines() -> None:
     """释放所有已缓存的引擎资源。"""
     with _ENGINE_LOCK:
         for key, engine in list(_ENGINE_CACHE.items()):
-            kind, _ = key
+            kind = key[0]
             try:
                 if kind == "ocr" or kind == "tts":
                     engine.release()  # type: ignore[union-attr]
@@ -216,6 +233,7 @@ async def index() -> HTMLResponse:
 
 @app.post("/api/voice", tags=["voice"])
 async def voice(
+    request: Request,
     image: UploadFile = File(..., description="待识别的图片文件"),
     language: str = Form(_DEFAULT_LANGUAGE, description="OCR 识别语言"),
     voice: str = Form(_DEFAULT_VOICE, description="TTS 音色"),
@@ -232,6 +250,7 @@ async def voice(
         event: error   处理出错
 
     Args:
+        request: FastAPI 请求对象，用于读取 Content-Length 预检上传大小。
         image: 上传的图片文件。
         language: OCR 识别语言。
         voice: TTS 音色。
@@ -241,9 +260,29 @@ async def voice(
 
     Returns:
         StreamingResponse，Content-Type 为 text/event-stream。
+
+    Raises:
+        HTTPException: 上传超过 4.5MB（413）或 tts_backend 为 vits（422）。
     """
-    image_bytes = await image.read()
-    request = VoiceRequest(
+    # vits 后端需要离线模型路径，Web 服务不提供，直接拒绝
+    if tts_backend == "vits":
+        raise HTTPException(
+            status_code=422,
+            detail="VITS backend is not supported in the web service; use tts_backend=edge.",
+        )
+
+    # 第一层防御：依据 Content-Length 预检，超限直接拒绝，避免读入内存
+    content_length = request.headers.get("content-length")
+    if content_length is not None and content_length.isdigit() and int(content_length) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Uploaded image exceeds the {_MAX_UPLOAD_BYTES} byte limit.",
+        )
+
+    # 第二层防御：分块读取并累计大小，无 Content-Length 的 chunked 请求同样受限
+    image_bytes = await _read_limited_upload(image, _MAX_UPLOAD_BYTES)
+
+    voice_request = VoiceRequest(
         image_bytes=image_bytes,
         language=language,
         voice=voice,
@@ -252,12 +291,13 @@ async def voice(
         tts_backend=tts_backend,
     )
 
+    cancel_event = threading.Event()
     event_queue: queue.Queue[tuple[str, dict[str, Any]] | None] = queue.Queue(maxsize=_MAX_QUEUE_SIZE)
-    worker = threading.Thread(target=_run_worker, args=(request, event_queue), daemon=True)
+    worker = threading.Thread(target=_run_worker, args=(voice_request, event_queue, cancel_event), daemon=True)
     worker.start()
 
     return StreamingResponse(
-        _sse_generator(event_queue),
+        _sse_generator(event_queue, cancel_event),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -265,6 +305,32 @@ async def voice(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+async def _read_limited_upload(image: UploadFile, limit: int) -> bytes:
+    """分块读取上传文件，累计超过 limit 时抛出 413。
+
+    Args:
+        image: 上传文件对象。
+        limit: 允许的最大字节数。
+
+    Returns:
+        拼接后的完整字节。
+
+    Raises:
+        HTTPException: 累计大小超过 limit 时抛出 413。
+    """
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await image.read(_UPLOAD_CHUNK_SIZE)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > limit:
+            raise HTTPException(status_code=413, detail=f"Uploaded image exceeds the {limit} byte limit.")
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def _decode_image(image_bytes: bytes) -> object:
@@ -287,12 +353,17 @@ def _decode_image(image_bytes: bytes) -> object:
     return decoded if decoded is not None else image_bytes
 
 
-def _run_worker(request: VoiceRequest, event_queue: queue.Queue[tuple[str, dict[str, Any]] | None]) -> None:
+def _run_worker(
+    request: VoiceRequest,
+    event_queue: queue.Queue[tuple[str, dict[str, Any]] | None],
+    cancel_event: threading.Event,
+) -> None:
     """在后台线程执行 OCR 识别与流式 TTS 合成，并按序投递事件到队列。
 
     Args:
         request: 语音合成请求。
         event_queue: SSE 事件队列。
+        cancel_event: 取消信号，客户端断开后由 SSE 生成器置位以终止本线程。
     """
     config = AppConfig(language=request.language, voice=request.voice, tts_backend=request.tts_backend)
     tts_config = TTSConfig(voice=request.voice, rate=request.rate)
@@ -308,6 +379,7 @@ def _run_worker(request: VoiceRequest, event_queue: queue.Queue[tuple[str, dict[
             _put_event(
                 event_queue,
                 ("done", {"text": "", "reason": "no-valid-text"}),
+                cancel_event,
             )
             return
 
@@ -322,6 +394,7 @@ def _run_worker(request: VoiceRequest, event_queue: queue.Queue[tuple[str, dict[
                     "language": recognition.language_detected,
                 },
             ),
+            cancel_event,
         )
 
         # 2. 流式 TTS 合成
@@ -338,8 +411,9 @@ def _run_worker(request: VoiceRequest, event_queue: queue.Queue[tuple[str, dict[
                                 "is_final": chunk.is_final,
                             },
                         ),
+                        cancel_event,
                     )
-                _put_event(event_queue, ("done", {"text": cleaned}))
+                _put_event(event_queue, ("done", {"text": cleaned}), cancel_event)
                 return
             except Exception as exc:  # noqa: BLE001 - 流式失败降级为一次性合成
                 logger.warning("Streaming TTS failed, fallback to one-shot: %s", exc)
@@ -349,8 +423,9 @@ def _run_worker(request: VoiceRequest, event_queue: queue.Queue[tuple[str, dict[
         _put_event(
             event_queue,
             ("audio", {"data": base64.b64encode(result.audio_data).decode("ascii"), "is_final": True}),
+            cancel_event,
         )
-        _put_event(event_queue, ("done", {"text": cleaned}))
+        _put_event(event_queue, ("done", {"text": cleaned}), cancel_event)
     except Exception as exc:  # noqa: BLE001 - 跨线程传递异常，交由 SSE 端转为 error 事件
         # 记录完整 traceback（含 __cause__ 链），便于在 Vercel 日志中定位根因
         logger.error("Worker failed:\n%s", "".join(traceback.format_exception(exc)))
@@ -358,40 +433,70 @@ def _run_worker(request: VoiceRequest, event_queue: queue.Queue[tuple[str, dict[
         detail = str(exc)
         if cause is not None:
             detail = f"{detail} (cause: {cause})"
-        _put_event(event_queue, ("error", {"detail": detail}))
+        _put_event(event_queue, ("error", {"detail": detail}), cancel_event)
     finally:
-        event_queue.put(None)
+        # 使用超时入队并在取消时退出，避免客户端断开后线程永久阻塞在 put(None)
+        _put_sentinel(event_queue, cancel_event)
+
+
+def _put_sentinel(event_queue: queue.Queue[tuple[str, dict[str, Any]] | None], cancel_event: threading.Event) -> None:
+    """向队列写入终止哨兵，队列满或已取消时及时放弃。
+
+    Args:
+        event_queue: SSE 事件队列。
+        cancel_event: 取消信号。
+    """
+    while not cancel_event.is_set():
+        try:
+            event_queue.put(None, timeout=_QUEUE_TIMEOUT)
+            return
+        except queue.Full:
+            continue
 
 
 def _put_event(
-    event_queue: queue.Queue[tuple[str, dict[str, Any]] | None], event: tuple[str, dict[str, Any]] | None
+    event_queue: queue.Queue[tuple[str, dict[str, Any]] | None],
+    event: tuple[str, dict[str, Any]] | None,
+    cancel_event: threading.Event,
 ) -> None:
-    """向 SSE 事件队列写入事件，满时阻塞等待。
+    """向 SSE 事件队列写入事件，满时轮询等待，已取消则放弃。
 
     Args:
         event_queue: SSE 事件队列。
         event: 待写入的事件。
+        cancel_event: 取消信号，置位后停止重试。
     """
-    event_queue.put(event)
+    while not cancel_event.is_set():
+        try:
+            event_queue.put(event, timeout=_QUEUE_TIMEOUT)
+            return
+        except queue.Full:
+            continue
 
 
 async def _sse_generator(
     event_queue: queue.Queue[tuple[str, dict[str, Any]] | None],
+    cancel_event: threading.Event,
 ) -> AsyncIterator[str]:
     """从事件队列读取事件并格式化为 SSE 文本流。
 
     Args:
         event_queue: SSE 事件队列。
+        cancel_event: 取消信号，本生成器退出（含客户端断开）时置位以终止 worker。
 
     Yields:
         符合 SSE 规范的事件文本块。
     """
     loop = asyncio.get_running_loop()
-    while True:
-        # 在事件循环中通过 run_in_executor 获取队列项，避免阻塞事件循环
-        item = await loop.run_in_executor(None, event_queue.get)
-        if item is None:
-            break
-        event_name, data = item
-        payload = json.dumps(data, ensure_ascii=False)
-        yield f"event: {event_name}\ndata: {payload}\n\n"
+    try:
+        while True:
+            # 在事件循环中通过 run_in_executor 获取队列项，避免阻塞事件循环
+            item = await loop.run_in_executor(None, event_queue.get)
+            if item is None:
+                break
+            event_name, data = item
+            payload = json.dumps(data, ensure_ascii=False)
+            yield f"event: {event_name}\ndata: {payload}\n\n"
+    finally:
+        # 生成器结束（正常结束或客户端断开引发 GeneratorExit）时通知 worker 取消
+        cancel_event.set()

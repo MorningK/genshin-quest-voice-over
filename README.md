@@ -151,7 +151,7 @@ vercel deploy    # 部署到生产
   2. 项目 **Settings → Environment Variables** 新增：`VERCEL_SUPPORT_LARGE_FUNCTIONS = 1`。
   配置后需**重新部署**。若构建日志不再出现 "optimizing dependencies"（或 bundle 明显大于 500MB 且正常部署），即表示已生效。
 - **请求体上限（4.5MB）**：Vercel 函数请求/响应体最大 4.5MB，上传超大图片会报 `FUNCTION_PAYLOAD_TOO_LARGE`。前端已在 `static/index.html` 中对图片做**客户端压缩**（Canvas 等比缩放至最长边 1600px 并转 JPEG、逐档降质至约 3.5MB 以内），确保上传体积低于该限制；服务端 OCR 也会将图片降到最长边 1280px，不影响识别效果。若绕过前端直接调用 API，请自行控制图片体积。
-- `vercel.json` 为函数配置了 `maxDuration` 与 `memory`。SSE 长连接受函数 `maxDuration` 约束（Hobby 最高 60s），复杂 OCR + 多段语音的流式响应请确保在超时内完成。
+- **函数时长与资源配置**：`vercel.json` 仅配置了 `functions.server.py.maxDuration: 60` 与 `excludeFiles`，**未配置 `memory`**。Fluid Compute 下 Hobby 的时长上限为 300 秒，但本函数被 `maxDuration: 60` 显式限制为 60 秒；如需更长时长，请到 Vercel 控制台调整。memory 与 CPU 也需在 Vercel 控制台的 **Functions** 设置中配置（无法通过 `vercel.json` 在 Fluid Compute 下设置）。
 - Vercel serverless 冷启动较慢（首次加载 OCR/TTS 依赖与联网获取音色列表），且重度 OCR 模型与在线 TTS 在网络受限环境可能受限；生产场景建议以本地 `uvicorn` 或带常驻进程的平台为主，Vercel 作为轻量演示/分享入口。
 
 ### OCR 运行时失败诊断

@@ -756,7 +756,7 @@ requires-dist = [
     { name = "opencv-python-headless", marker = "extra == 'ocr-preprocess'", specifier = ">=4.10.0" },
     { name = "paddleocr", marker = "extra == 'ocr'", specifier = ">=3.0.0" },
     { name = "paddlepaddle", marker = "extra == 'ocr'", specifier = ">=3.0.0" },
-    { name = "python-multipart", specifier = ">=0.0.9" },
+    { name = "python-multipart", specifier = ">=0.0.30" },
     { name = "rapidocr", specifier = ">=3.9.2" },
     { name = "rapidocr", marker = "extra == 'ocr-rapid'", specifier = ">=3.9.2" },
     { name = "rapidocr", marker = "extra == 'ocr-rapid-gpu'", specifier = ">=3.9.2" },

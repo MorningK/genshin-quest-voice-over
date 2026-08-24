@@ -43,8 +43,11 @@
   .dropzone { border: 2px dashed rgba(63,182,232,.4); border-radius: 12px; padding: 32px;
               text-align: center; cursor: pointer; transition: all .25s ease; }
   .dropzone.drag { border-color: var(--primary); background: rgba(46,134,222,.08); transform: scale(1.01); }
+  .dropzone:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-color: var(--accent); }
   .dropzone .icon { font-size: 40px; margin-bottom: 8px; }
   .dropzone p { color: var(--muted); font-size: 14px; }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+             overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
   #preview { display: none; max-width: 100%; max-height: 240px; margin-top: 12px;
              border-radius: 8px; border: 1px solid rgba(255,255,255,.1); }
   #fileInfo { font-size: 13px; color: var(--muted); margin-top: 8px; }
@@ -86,11 +89,11 @@
 
   <div class="card">
     <h2>上传图片</h2>
-    <div class="dropzone" id="dropzone">
+    <div class="dropzone" id="dropzone" role="button" tabindex="0" aria-label="选择或拖拽图片上传">
       <div class="icon">🖼️</div>
       <p>点击选择或拖拽图片到此处</p>
       <p style="font-size:12px;margin-top:4px;">支持 PNG / JPG / JPEG / BMP</p>
-      <input type="file" id="fileInput" accept="image/*" style="display:none;">
+      <input type="file" id="fileInput" accept="image/*" class="sr-only">
     </div>
     <img id="preview" alt="预览" onerror="this.style.display='none';">
     <div id="fileInfo"></div>
@@ -120,7 +123,6 @@
         <label for="ttsBackend">语音后端</label>
         <select id="ttsBackend">
           <option value="edge" selected>Edge TTS（在线）</option>
-          <option value="vits">VITS（离线）</option>
         </select>
       </div>
       <div class="field">
@@ -180,21 +182,25 @@
     // 音色列表
     fetch("/api/voices").then(r => r.json()).then(d => {
       if (d.voices && d.voices.length) {
+        const preferredVoice = voiceSel.value;
         voiceSel.innerHTML = "";
         d.voices.forEach(v => {
           const opt = document.createElement("option");
           opt.value = v; opt.textContent = v;
           voiceSel.appendChild(opt);
         });
-        const cur = voiceSel.value;
-        if (!Array.from(voiceSel.options).some(o => o.value === cur)) {
-          voiceSel.value = "zh-CN-XiaoxiaoNeural";
+        // 若返回列表包含默认音色则恢复，否则保持第一项
+        if (Array.from(voiceSel.options).some(o => o.value === preferredVoice)) {
+          voiceSel.value = preferredVoice;
         }
       }
     }).catch(() => {});
 
     // 上传交互
     dropzone.addEventListener("click", () => fileInput.click());
+    dropzone.addEventListener("keydown", e => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInput.click(); }
+    });
     dropzone.addEventListener("dragover", e => { e.preventDefault(); dropzone.classList.add("drag"); });
     dropzone.addEventListener("dragleave", () => dropzone.classList.remove("drag"));
     dropzone.addEventListener("drop", e => {
@@ -203,8 +209,15 @@
     });
     fileInput.addEventListener("change", e => { if (e.target.files.length) handleFile(e.target.files[0]); });
 
+    // 选择序号，用于忽略过期的异步压缩结果
+    let selectionId = 0;
+
     function handleFile(file) {
       if (!file.type.startsWith("image/")) { setStatus("仅支持图片文件", true); return; }
+      const currentId = ++selectionId;
+      // 开始新选择时清空旧的上传文件并禁用提交，避免提交过期图片
+      uploadFile = null;
+      submitBtn.disabled = true;
       // 保留原始文件用于预览
       const reader = new FileReader();
       reader.onload = e => { preview.src = e.target.result; preview.style.display = "block"; };
@@ -213,10 +226,13 @@
       setStatus("正在压缩图片，请稍候");
       // 压缩后作为上传文件（控制在 Vercel 4.5MB 请求体限制以内）
       compressImage(file).then(function (blob) {
+        if (currentId !== selectionId) return; // 忽略过期选择的结果
         uploadFile = blob;
+        submitBtn.disabled = false;
         fileInfo.textContent = file.name + " → " + (blob.size / 1024).toFixed(1) + " KB";
         setStatus("已选择图片，点击开始识别");
       }).catch(function (err) {
+        if (currentId !== selectionId) return; // 忽略过期选择的错误
         setStatus("图片压缩失败：" + err.message, true);
       });
     }

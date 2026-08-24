@@ -18,7 +18,7 @@ dependencies = [
     "edge-tts>=6.1.0",
     # Web 服务（FastAPI + SSE）
     "fastapi>=0.115.0",
-    "python-multipart>=0.0.9",
+    "python-multipart>=0.0.30",
 ]
 
 [project.optional-dependencies]
