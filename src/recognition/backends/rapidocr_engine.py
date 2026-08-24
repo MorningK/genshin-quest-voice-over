@@ -79,7 +79,10 @@ class RapidOCREngine(TextRecognizer):
             from rapidocr import RapidOCR
         except ImportError as exc:
             raise RuntimeError(
-                "rapidocr (and onnxruntime) is not installed. Run `uv sync --extra ocr-rapid` to enable RapidOCR."
+                f"Failed to import rapidocr/onnxruntime: {exc}. "
+                "Run `uv sync --extra ocr-rapid` locally, or on Vercel verify Large Functions "
+                "(VERCEL_SUPPORT_LARGE_FUNCTIONS=1 + Fluid Compute) is enabled so onnxruntime "
+                "is not trimmed from the function bundle."
             ) from exc
 
         params: dict[str, Any] = {

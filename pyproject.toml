@@ -4,8 +4,21 @@ version = "0.1.0"
 description = "Genshin Impact quest dialogue voice-over generation system"
 readme = "README.md"
 requires-python = ">=3.12"
+# 基础运行依赖：含 Web 服务（FastAPI+SSE）与 OCR/TTS 引擎运行时。
+# 说明：Web 服务（server.py）需在 Vercel 上运行，Vercel 仅安装 [project].dependencies
+#       中的依赖（不安装可选组），故将 Web/OCR/TTS 运行时依赖全部置于此处，
+#       以确保 Vercel 原生打包时能正确装入并随函数 bundle 分发。
 dependencies = [
+    # 图像处理与 OCR（RapidOCR，默认后端）
     "numpy>=2.5.1",
+    "onnxruntime>=1.28.0",
+    "rapidocr>=3.9.2",
+    "opencv-python-headless>=4.10.0",
+    # 流式 TTS（Edge TTS，默认后端）
+    "edge-tts>=6.1.0",
+    # Web 服务（FastAPI + SSE）
+    "fastapi>=0.115.0",
+    "python-multipart>=0.0.30",
 ]
 
 [project.optional-dependencies]
@@ -44,6 +57,12 @@ ocr-preprocess = [
 playback = [
     "miniaudio>=1.71",
 ]
+# Web 服务（FastAPI + SSE）：图片 OCR 识别 + 流式 TTS 语音合成
+# 说明：fastapi / python-multipart 为 Vercel 运行时必需，已置于 [project].dependencies；
+#       uvicorn 仅本地开发运行 server.py 时使用，故单独作为可选依赖，避免打包进 Vercel 函数。
+web = [
+    "uvicorn>=0.30.0",
+]
 
 [dependency-groups]
 dev = [
@@ -53,12 +72,29 @@ dev = [
 ]
 
 # ============================================
+# Vercel 部署配置 — FastAPI 入口
+# ============================================
+[tool.vercel]
+# 声明 FastAPI 实例入口：在 ./server.py 中查找名为 `app` 的应用
+entrypoint = "server:app"
+
+# ============================================
 # uv 配置 — 可选依赖组互斥声明
 # ============================================
 [tool.uv]
 # onnxruntime（CPU）与 onnxruntime-gpu（GPU）共享包名，二者互斥，不可同时激活
 conflicts = [
     [{ extra = "ocr-rapid" }, { extra = "ocr-rapid-gpu" }],
+]
+
+# rapidocr 硬依赖 opencv-python（GUI 版），其需要 libxcb/libGL 等 X11 系统库，
+# 在 Vercel 等无显示环境的 serverless 上会因缺 libxcb.so.1 而导入失败。
+# 这里全局排除 GUI 版 opencv-python，改用基础依赖中的 opencv-python-headless
+# （无 GUI/X11 依赖）提供 cv2，满足 rapidocr 的运行需求。
+# 注意：使用字符串形式（PEP 508），兼容 Vercel 构建用的 uv 0.10.x；
+#       对象形式（{ package = ... }）是 uv 0.11+ 才支持的语法，旧版会解析失败。
+exclude-dependencies = [
+    "opencv-python",
 ]
 
 # ============================================

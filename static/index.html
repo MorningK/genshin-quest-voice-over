@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>原神对话语音识别</title>
+<style>
+  :root {
+    --bg: #0E1420;
+    --bg-2: #1A2233;
+    --card: #242E42;
+    --primary: #2E86DE;
+    --primary-2: #1A5276;
+    --accent: #3FB6E8;
+    --text: #F5F7FA;
+    --muted: #B0B8C8;
+    --ok: #4CAF50;
+    --err: #F44336;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "Noto Sans", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: radial-gradient(1200px 600px at 20% -10%, #1A5276 0%, transparent 60%),
+                radial-gradient(1000px 500px at 100% 0%, #242E42 0%, transparent 55%),
+                linear-gradient(160deg, var(--bg) 0%, var(--bg-2) 100%);
+    color: var(--text);
+    min-height: 100vh;
+    padding: 24px;
+  }
+  .container { max-width: 960px; margin: 0 auto; }
+  header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
+  header h1 { font-size: 26px; font-weight: 600; }
+  header p { font-size: 14px; color: var(--muted); }
+  .badge { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted);
+           background: var(--card); padding: 6px 14px; border-radius: 999px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
+  .dot.idle { background: var(--muted); }
+  .dot.err { background: var(--err); }
+  .card { background: linear-gradient(160deg, rgba(36,46,66,.9), rgba(26,34,51,.9));
+          border: 1px solid rgba(255,255,255,.06); border-radius: 16px; padding: 20px;
+          margin-bottom: 20px; box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+  .card h2 { font-size: 16px; font-weight: 500; margin-bottom: 16px; color: var(--accent); }
+  .dropzone { border: 2px dashed rgba(63,182,232,.4); border-radius: 12px; padding: 32px;
+              text-align: center; cursor: pointer; transition: all .25s ease; }
+  .dropzone.drag { border-color: var(--primary); background: rgba(46,134,222,.08); transform: scale(1.01); }
+  .dropzone:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-color: var(--accent); }
+  .dropzone .icon { font-size: 40px; margin-bottom: 8px; }
+  .dropzone p { color: var(--muted); font-size: 14px; }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+             overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+  #preview { display: none; max-width: 100%; max-height: 240px; margin-top: 12px;
+             border-radius: 8px; border: 1px solid rgba(255,255,255,.1); }
+  #fileInfo { font-size: 13px; color: var(--muted); margin-top: 8px; }
+  .row { display: flex; flex-wrap: wrap; gap: 16px; }
+  .field { flex: 1 1 180px; display: flex; flex-direction: column; gap: 6px; }
+  .field label { font-size: 13px; color: var(--muted); }
+  select, input[type=range] { width: 100%; }
+  select { background: var(--bg-2); color: var(--text); border: 1px solid rgba(255,255,255,.12);
+           border-radius: 8px; padding: 8px 10px; font-size: 14px; }
+  .btn { margin-top: 16px; width: 100%; padding: 12px; border: none; border-radius: 10px;
+         font-size: 15px; font-weight: 600; color: #fff; cursor: pointer;
+         background: linear-gradient(90deg, var(--primary), var(--primary-2));
+         transition: opacity .2s, transform .1s; }
+  .btn:hover:not(:disabled) { opacity: .9; transform: translateY(-1px); }
+  .btn:disabled { opacity: .6; cursor: not-allowed; }
+  .btn.loading { position: relative; pointer-events: none; }
+  .btn.loading::after { content: ""; position: absolute; right: 16px; top: 50%; width: 16px; height: 16px;
+                        margin-top: -8px; border: 2px solid rgba(255,255,255,.4); border-top-color: #fff;
+                        border-radius: 50%; animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #resultText { min-height: 60px; font-size: 16px; line-height: 1.6; }
+  #resultText:empty::before { content: "识别文本将显示在这里…"; color: var(--muted); font-size: 14px; }
+  #status { font-size: 13px; color: var(--muted); margin-top: 10px; min-height: 18px; }
+  #status.err { color: var(--err); }
+  audio { width: 100%; margin-top: 12px; }
+  footer { text-align: center; color: var(--muted); font-size: 12px; padding: 16px 0 8px; }
+  footer code { background: var(--card); padding: 2px 6px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <div>
+      <h1>原神对话语音识别</h1>
+      <p>上传截图，自动识别文字并生成语音朗读</p>
+    </div>
+    <div class="badge"><span id="healthDot" class="dot idle"></span><span id="healthText">连接中</span></div>
+  </header>
+
+  <div class="card">
+    <h2>上传图片</h2>
+    <div class="dropzone" id="dropzone" role="button" tabindex="0" aria-label="选择或拖拽图片上传">
+      <div class="icon">🖼️</div>
+      <p>点击选择或拖拽图片到此处</p>
+      <p style="font-size:12px;margin-top:4px;">支持 PNG / JPG / JPEG / BMP</p>
+      <input type="file" id="fileInput" accept="image/*" class="sr-only">
+    </div>
+    <img id="preview" alt="预览" onerror="this.style.display='none';">
+    <div id="fileInfo"></div>
+  </div>
+
+  <div class="card">
+    <h2>参数配置</h2>
+    <div class="row">
+      <div class="field">
+        <label for="language">识别语言</label>
+        <select id="language">
+          <option value="ch" selected>中文</option>
+          <option value="ch_en">中英混合</option>
+          <option value="en">英文</option>
+          <option value="japan">日文</option>
+          <option value="korean">韩文</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="ocrBackend">OCR 后端</label>
+        <select id="ocrBackend">
+          <option value="rapid" selected>RapidOCR（轻量）</option>
+          <option value="paddle">PaddleOCR</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="ttsBackend">语音后端</label>
+        <select id="ttsBackend">
+          <option value="edge" selected>Edge TTS（在线）</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="voice">音色</label>
+        <select id="voice"><option value="zh-CN-XiaoxiaoNeural">默认</option></select>
+      </div>
+      <div class="field">
+        <label for="rate">语速 <span id="rateVal">1.0x</span></label>
+        <input type="range" id="rate" min="0.5" max="2.0" step="0.1" value="1.0">
+      </div>
+    </div>
+    <button class="btn" id="submitBtn">开始识别并朗读</button>
+  </div>
+
+  <div class="card">
+    <h2>识别与播放</h2>
+    <div id="resultText"></div>
+    <audio id="player" controls></audio>
+    <div id="status">就绪</div>
+  </div>
+
+  <footer>本地运行：<code>uv run uvicorn server:app --host 0.0.0.0 --port 8000</code> · 支持 Vercel 部署</footer>
+</div>
+
+<script>
+  (function () {
+    const dropzone = document.getElementById("dropzone");
+    const fileInput = document.getElementById("fileInput");
+    const preview = document.getElementById("preview");
+    const fileInfo = document.getElementById("fileInfo");
+    const languageSel = document.getElementById("language");
+    const ocrBackend = document.getElementById("ocrBackend");
+    const ttsBackend = document.getElementById("ttsBackend");
+    const voiceSel = document.getElementById("voice");
+    const rateInput = document.getElementById("rate");
+    const rateVal = document.getElementById("rateVal");
+    const submitBtn = document.getElementById("submitBtn");
+    const resultText = document.getElementById("resultText");
+    const player = document.getElementById("player");
+    const statusEl = document.getElementById("status");
+    const healthDot = document.getElementById("healthDot");
+    const healthText = document.getElementById("healthText");
+
+    let uploadFile = null;
+
+    // 健康检查
+    function checkHealth() {
+      fetch("/health").then(r => r.json()).then(() => {
+        healthDot.className = "dot"; healthText.textContent = "在线";
+      }).catch(() => {
+        healthDot.className = "dot err"; healthText.textContent = "离线";
+      });
+    }
+    checkHealth();
+    setInterval(checkHealth, 15000);
+
+    // 音色列表
+    fetch("/api/voices").then(r => r.json()).then(d => {
+      if (d.voices && d.voices.length) {
+        const preferredVoice = voiceSel.value;
+        voiceSel.innerHTML = "";
+        d.voices.forEach(v => {
+          const opt = document.createElement("option");
+          opt.value = v; opt.textContent = v;
+          voiceSel.appendChild(opt);
+        });
+        // 若返回列表包含默认音色则恢复，否则保持第一项
+        if (Array.from(voiceSel.options).some(o => o.value === preferredVoice)) {
+          voiceSel.value = preferredVoice;
+        }
+      }
+    }).catch(() => {});
+
+    // 上传交互
+    dropzone.addEventListener("click", () => fileInput.click());
+    dropzone.addEventListener("keydown", e => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInput.click(); }
+    });
+    dropzone.addEventListener("dragover", e => { e.preventDefault(); dropzone.classList.add("drag"); });
+    dropzone.addEventListener("dragleave", () => dropzone.classList.remove("drag"));
+    dropzone.addEventListener("drop", e => {
+      e.preventDefault(); dropzone.classList.remove("drag");
+      if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+    });
+    fileInput.addEventListener("change", e => { if (e.target.files.length) handleFile(e.target.files[0]); });
+
+    // 选择序号，用于忽略过期的异步压缩结果
+    let selectionId = 0;
+
+    function handleFile(file) {
+      if (!file.type.startsWith("image/")) { setStatus("仅支持图片文件", true); return; }
+      const currentId = ++selectionId;
+      // 开始新选择时清空旧的上传文件并禁用提交，避免提交过期图片
+      uploadFile = null;
+      submitBtn.disabled = true;
+      // 保留原始文件用于预览
+      const reader = new FileReader();
+      reader.onload = e => { preview.src = e.target.result; preview.style.display = "block"; };
+      reader.readAsDataURL(file);
+      fileInfo.textContent = "正在压缩…";
+      setStatus("正在压缩图片，请稍候");
+      // 压缩后作为上传文件（控制在 Vercel 4.5MB 请求体限制以内）
+      compressImage(file).then(function (blob) {
+        if (currentId !== selectionId) return; // 忽略过期选择的结果
+        uploadFile = blob;
+        submitBtn.disabled = false;
+        fileInfo.textContent = file.name + " → " + (blob.size / 1024).toFixed(1) + " KB";
+        setStatus("已选择图片，点击开始识别");
+      }).catch(function (err) {
+        if (currentId !== selectionId) return; // 忽略过期选择的错误
+        setStatus("图片压缩失败：" + err.message, true);
+      });
+    }
+
+    // 用 Canvas 压缩图片：等比缩小 + JPEG 编码，逐步降质量直到体积足够小
+    function compressImage(file, maxSize) {
+      maxSize = maxSize || 3.5 * 1024 * 1024; // 目标上限 ~3.5MB，留安全余量低于 Vercel 4.5MB 限制
+      return new Promise(function (resolve, reject) {
+        const img = new Image();
+        const url = URL.createObjectURL(file);
+        img.onload = function () {
+          try {
+            // 等比限制最长边，避免超大分辨率；服务端 OCR 也会降到 1280，此处 1600 足够
+            const MAX_EDGE = 1600;
+            let w = img.width, h = img.height;
+            const long = Math.max(w, h);
+            if (long > MAX_EDGE) {
+              const scale = MAX_EDGE / long;
+              w = Math.round(w * scale);
+              h = Math.round(h * scale);
+            }
+            const canvas = document.createElement("canvas");
+            canvas.width = w; canvas.height = h;
+            const ctx = canvas.getContext("2d");
+            ctx.drawImage(img, 0, 0, w, h);
+            URL.revokeObjectURL(url);
+            // 用 toDataURL 同步编码为 JPEG，逐档降低质量直到体积足够小
+            const qualities = [0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3];
+            let dataUrl = null;
+            for (let i = 0; i < qualities.length; i++) {
+              dataUrl = canvas.toDataURL("image/jpeg", qualities[i]);
+              // 估算解码后字节数：base64 去掉 data 头后约 3/4 为字节数
+              const bytes = Math.floor(dataUrl.length * 0.75);
+              if (bytes <= maxSize) break;
+            }
+            if (!dataUrl) { reject(new Error("无法编码图片")); return; }
+            // data URL → Blob
+            const bin = atob(dataUrl.split(",")[1]);
+            const bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            resolve(new Blob([bytes], { type: "image/jpeg" }));
+          } catch (e) {
+            URL.revokeObjectURL(url);
+            reject(e);
+          }
+        };
+        img.onerror = function () { URL.revokeObjectURL(url); reject(new Error("无法读取图片")); };
+        img.src = url;
+      });
+    }
+
+    rateInput.addEventListener("input", () => { rateVal.textContent = rateInput.value + "x"; });
+
+    // 提交
+    submitBtn.addEventListener("click", () => {
+      if (!uploadFile) { setStatus("请先选择一张图片", true); return; }
+      const form = new FormData();
+      form.append("image", uploadFile);
+      form.append("language", languageSel.value);
+      form.append("ocr_backend", ocrBackend.value);
+      form.append("tts_backend", ttsBackend.value);
+      form.append("voice", voiceSel.value);
+      form.append("rate", rateInput.value);
+
+      resultText.textContent = "";
+      player.pause(); player.src = "";
+      submitBtn.classList.add("loading"); submitBtn.disabled = true;
+      setStatus("正在识别并合成语音…");
+      const audioParts = [];
+
+      fetch("/api/voice", { method: "POST", body: form })
+        .then(resp => {
+          if (!resp.ok) throw new Error("HTTP " + resp.status);
+          const reader = resp.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+
+          function pump() {
+            return reader.read().then(function process(result) {
+              if (result.done) return;
+              buffer += decoder.decode(result.value, { stream: true });
+              let idx;
+              while ((idx = buffer.indexOf("\n\n")) !== -1) {
+                const block = buffer.slice(0, idx);
+                buffer = buffer.slice(idx + 2);
+                handleBlock(block);
+              }
+              return pump();
+            });
+          }
+          return pump();
+        })
+        .catch(err => setStatus("请求失败：" + err.message, true))
+        .finally(() => {
+          submitBtn.classList.remove("loading"); submitBtn.disabled = false;
+        });
+
+      function handleBlock(block) {
+        let eventName = "message";
+        const dataLines = [];
+        block.split("\n").forEach(line => {
+          if (line.indexOf("event:") === 0) eventName = line.slice(6).trim();
+          else if (line.indexOf("data:") === 0) dataLines.push(line.slice(5).trim());
+        });
+        if (!dataLines.length) return;
+        let payload;
+        try { payload = JSON.parse(dataLines.join("\n")); } catch (e) { return; }
+
+        if (eventName === "text") {
+          resultText.textContent = payload.text || "";
+          setStatus("识别完成，置信度 " + (payload.confidence || 0).toFixed(2));
+        } else if (eventName === "audio" && payload.data) {
+          const binary = atob(payload.data);
+          const bytes = new Uint8Array(binary.length);
+          for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+          // 累积所有 MP3 分片，播放时拼接为完整音频
+          audioParts.push(bytes);
+        } else if (eventName === "done") {
+          setStatus("处理完成");
+          if (audioParts.length) {
+            playFullAudio(audioParts);
+          }
+        } else if (eventName === "error") {
+          setStatus("出错：" + payload.detail, true);
+        }
+      }
+    });
+
+    // 拼接所有 MP3 分片为完整音频并播放
+    function playFullAudio(parts) {
+      // 计算总字节数，避免反复拼接
+      let total = 0;
+      parts.forEach(p => { total += p.length; });
+      const merged = new Uint8Array(total);
+      let offset = 0;
+      parts.forEach(p => { merged.set(p, offset); offset += p.length; });
+      const blob = new Blob([merged], { type: "audio/mpeg" });
+      const url = URL.createObjectURL(blob);
+      if (player.src) URL.revokeObjectURL(player.src);
+      player.src = url;
+      player.play().catch(function (err) {
+        setStatus("自动播放被拦截，请点击播放按钮", true);
+      });
+      setStatus("语音合成完成，正在播放");
+    }
+
+    function setStatus(msg, isErr) {
+      statusEl.textContent = msg;
+      statusEl.className = isErr ? "err" : "";
+    }
+  })();
+</script>
+</body>
+</html>
