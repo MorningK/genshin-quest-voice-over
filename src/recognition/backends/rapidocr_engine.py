@@ -142,10 +142,15 @@ class RapidOCREngine(TextRecognizer):
         if self._config is None:
             raise RuntimeError("RapidOCR engine is not configured.")
 
+        # 仅当配置开启裁剪且输入确为 numpy 数组时才发生实际裁剪；
+        # bytes 输入（Web 上传路径）会被 crop_dialogue_band 原样透传，
+        # 此时不得放宽 ROI 垂直过滤，否则整图识别的 UI 噪声会混入 roi_text。
+        import numpy as _np
+
+        band_was_cropped = isinstance(image, _np.ndarray) and self._config.crop_dialogue_band
         # 先按需裁剪底部对白带再缩小最长边：裁剪发生在原始分辨率上，
-        # 字幕带区完整保留；bytes 输入（Web 上传路径）经 crop_dialogue_band 原样透传，
-        # 保证 Web 端行为不变。裁剪可减少约 60–70% 推理像素量、显著降低 CPU 占用。
-        ocr_input = crop_dialogue_band(image) if self._config.crop_dialogue_band else image
+        # 字幕带区完整保留。裁剪可减少约 60–70% 推理像素量、显著降低 CPU 占用。
+        ocr_input = crop_dialogue_band(image) if band_was_cropped else image
         # 再等比缩小最长边至 _MAX_INPUT_SIZE 以内，进一步降低推理计算量与资源占用；
         # 字节输入原样传给 preprocess_frame。
         processed = downscale_to_max_side(ocr_input, self._MAX_INPUT_SIZE)
@@ -200,14 +205,11 @@ class RapidOCREngine(TextRecognizer):
         # 缺 OpenCV 时 applied=False, roi_text 置空, pipeline 回退到全帧文本.
         roi_text = ""
         if applied:
-            try:
-                import numpy as _np
-            except ImportError:
-                _np = None  # type: ignore[assignment]
-            image_shape = enhanced.shape[:2] if _np is not None and isinstance(enhanced, _np.ndarray) else None
-            # 输入已预裁剪为对白带时告知过滤器跳过带顶比例剔除，
+            # _np 为方法开头的运行时惰性导入（文件头 np 仅类型检查可见）
+            image_shape = enhanced.shape[:2] if isinstance(enhanced, _np.ndarray) else None
+            # 输入已实际预裁剪为对白带时才跳过带顶比例剔除，
             # 否则字幕会被误划出带外导致 roi_text 恒为空而回退全帧文本
-            roi_boxes = extract_dialogue_boxes(ordered_boxes, image_shape, pre_cropped=self._config.crop_dialogue_band)
+            roi_boxes = extract_dialogue_boxes(ordered_boxes, image_shape, pre_cropped=band_was_cropped)
             # 逐框过滤游戏 UI 噪声 (UID/手柄提示等), 命中噪声的框不计入 roi_text,
             # 避免锚定模式在与其他文本同帧时无法匹配
             roi_parts = [b.text for b in roi_boxes if filter_ui_noise(b.text) is not None]

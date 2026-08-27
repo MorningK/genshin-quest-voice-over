@@ -1,4 +1,4 @@
-# CODEBUDDY.md This file provides guidance to CodeBuddy when working with code in this repository.
+# AGENTS.md This file provides guidance to AI coding agents when working with code in this repository.
 
 ## 项目概述
 
@@ -58,7 +58,7 @@ uv run pyrefly check
 
 **降级策略贯穿全局**：
 1. 引擎初始化时按 primary → fallback 顺序尝试（如 capture: dxcam→mss、OCR: rapid→paddle），均失败则报错并给出对应 `uv sync --extra <组>` 激活提示。
-2. 合成/播放优先走流式路径（仅当 TTS `supports_streaming` 且播放器 `supports_streaming` 同时为真，即 Edge TTS + miniaudio），流式异常时自动降级为一次性合成 + 阻塞播放。新增后端时应覆写 `supports_streaming` 属性。
+2. 合成/播放优先走流式路径（仅当 TTS `supports_streaming` 且播放器 `supports_streaming` 同时为真，即 Edge TTS + miniaudio），流式过程抛出 `RuntimeError`/`ValueError` 时降级为一次性合成 + 阻塞播放（见 `_process_frame()` 的捕获范围）。新增后端时应覆写 `supports_streaming` 属性。
 3. 可选能力缺失时静默降级而非崩溃（如缺 `ocr-preprocess` 时放弃 ROI 聚焦回退全帧文本）。注意向内导入具体实现放在函数体内（延迟导入），保证未安装可选依赖时模块仍可加载。
 
 ### 数据管道（pipeline.py）

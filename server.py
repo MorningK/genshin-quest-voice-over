@@ -101,12 +101,20 @@ def _get_engine(kind: str, backend: str, config: AppConfig, tts_config: TTSConfi
         RuntimeError: 引擎初始化失败时抛出。
     """
     if kind == "ocr":
-        # OCR 初始化仅受 language 与 use_gpu 影响，纳入缓存键避免不同语言复用同一实例
+        # OCR 初始化仅受 language/use_gpu/text_direction/ocr_threads 影响，
+        # 全部纳入缓存键避免不同配置复用同一引擎实例
         rec_config = config.to_recognition_config()
         # Web 端输入为用户上传的任意截图（bytes，无对白带先验），
         # 显式关闭桌面端的裁剪与 Det 参数优化，保持服务端行为与旧版一致
         rec_config.crop_dialogue_band = False
-        key: tuple[Any, ...] = ("ocr", backend, rec_config.language, rec_config.use_gpu)
+        key: tuple[Any, ...] = (
+            "ocr",
+            backend,
+            rec_config.language,
+            rec_config.use_gpu,
+            rec_config.enable_text_direction,
+            rec_config.max_inference_threads,
+        )
     elif kind == "tts":
         init_config = tts_config if tts_config is not None else config.to_tts_config()
         # TTS 初始化受 voice/rate/offline/model_path 影响，纳入缓存键

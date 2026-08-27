@@ -220,6 +220,10 @@ def parse_args(argv: list[str] | None = None) -> AppConfig:
         parser.error("--fps must be a positive integer.")
     if args.frame_similarity_step <= 0:
         parser.error("--frame-similarity-step must be a positive integer.")
+    if args.ocr_threads == 0:
+        # 正值表示线程上限，负值表示不限；0 无定义语义（后端不会注入任何
+        # 线程参数，会静默回退引擎默认并发），直接拒绝以免误导用户
+        parser.error("--ocr-threads must be positive, or negative for unlimited.")
     if args.select_region and args.region is not None:
         parser.error("--region and --select-region are mutually exclusive.")
 
