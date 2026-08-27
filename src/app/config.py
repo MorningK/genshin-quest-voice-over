@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from src.app.region_selector import select_region
 from src.capture import CaptureConfig
 from src.common import Region, SelectedRegion
-from src.recognition import RecognitionConfig
+from src.recognition import DEFAULT_MAX_INFERENCE_THREADS, RecognitionConfig
 from src.tts import TTSConfig
 
 DEFAULT_FPS = 4
@@ -37,6 +37,15 @@ class AppConfig:
         tts_model_path: 离线 TTS 模型路径，仅 tts_backend="vits" 时使用。
         verbose: 是否输出 debug 级别日志。
         frame_similarity_step: 帧缓存比对的像素降采样步长，值越大计算量越小、精度越低。
+        ocr_threads: OCR CPU 推理线程数上限；负值表示不限制（用满全部物理核）。
+            设为较小值（如 2）可在游戏运行时为游戏让出 CPU 核，降低卡顿。
+        full_frame: 是否关闭底部对白带裁剪与对白带级帧门控，回退整帧处理旧行为。
+            默认 False 以获得最低 CPU 占用；识别异常时可用此开关兜底排查。
+            注意：手动指定 region（含 --select-region）时会自动停用带裁剪与
+            带级门控——整个选区即等价于预裁剪好的对白带，再次裁剪会导致
+            选区上部的字幕变化不被感知而漏读；此开关仅在默认全屏模式下有效。
+        text_direction: 是否启用 OCR 文字方向检测（横排/竖排）。游戏字幕恒为横排，
+            默认关闭以省去每帧的方向分类器推理。
     """
 
     capture_backend: str = "dxcam"
@@ -51,6 +60,9 @@ class AppConfig:
     tts_model_path: str | None = None
     verbose: bool = False
     frame_similarity_step: int = DEFAULT_FRAME_SIMILARITY_STEP
+    ocr_threads: int = DEFAULT_MAX_INFERENCE_THREADS
+    full_frame: bool = False
+    text_direction: bool = False
 
     def to_capture_config(self) -> CaptureConfig:
         """转换为屏幕捕获配置。
@@ -65,11 +77,18 @@ class AppConfig:
 
         Returns:
             RecognitionConfig 对象，语言由 AppConfig.language 决定，
-            GPU 加速由 AppConfig.use_gpu 决定。
+            GPU 加速由 AppConfig.use_gpu 决定；推理线程上限、对白带裁剪
+            与文字方向检测分别由 ocr_threads/full_frame/text_direction 决定。
+            手动指定 region（--region / --select-region）时自动停用带裁剪：
+            用户选区本身即预裁剪的对白带，叠加自动裁剪会切掉选区上部
+            导致漏读与截断。
         """
         return RecognitionConfig(
             language=self.language,
             use_gpu=self.use_gpu,
+            enable_text_direction=self.text_direction,
+            max_inference_threads=self.ocr_threads,
+            crop_dialogue_band=not self.full_frame and self.region is None,
             capture_region=self.region,
         )
 
@@ -161,6 +180,28 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_FRAME_SIMILARITY_STEP,
         help=f"帧缓存比对的像素降采样步长（默认 {DEFAULT_FRAME_SIMILARITY_STEP}）",
     )
+    parser.add_argument(
+        "--ocr-threads",
+        type=int,
+        default=DEFAULT_MAX_INFERENCE_THREADS,
+        help=(
+            "OCR CPU 推理线程数上限，负值表示不限（默认 "
+            f"{DEFAULT_MAX_INFERENCE_THREADS}）。游戏运行时建议保持较小值以让出 CPU 核"
+        ),
+    )
+    parser.add_argument(
+        "--full-frame",
+        action="store_true",
+        help=(
+            "关闭底部对白带裁剪与对白带级帧门控，回退整帧处理旧行为（排查识别问题用）；"
+            "手动指定 region 时本就自动停用，此开关冗余但无害"
+        ),
+    )
+    parser.add_argument(
+        "--text-direction",
+        action="store_true",
+        help="启用 OCR 文字方向检测（横排/竖排）；游戏字幕恒为横排，默认关闭以省 CPU",
+    )
     return parser
 
 
@@ -204,4 +245,7 @@ def parse_args(argv: list[str] | None = None) -> AppConfig:
         tts_model_path=args.tts_model_path,
         verbose=args.verbose,
         frame_similarity_step=args.frame_similarity_step,
+        ocr_threads=args.ocr_threads,
+        full_frame=args.full_frame,
+        text_direction=args.text_direction,
     )

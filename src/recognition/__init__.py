@@ -7,6 +7,7 @@
 from src.common import Point
 from src.recognition.backends import PaddleOCREngine, RapidOCREngine
 from src.recognition.base import (
+    DEFAULT_MAX_INFERENCE_THREADS,
     RecognitionBox,
     RecognitionConfig,
     RecognitionResult,
@@ -15,6 +16,7 @@ from src.recognition.base import (
 )
 
 __all__ = [
+    "DEFAULT_MAX_INFERENCE_THREADS",
     "PaddleOCREngine",
     "Point",
     "RapidOCREngine",

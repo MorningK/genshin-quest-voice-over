@@ -11,6 +11,10 @@ import numpy as np
 
 from src.common import Point, Region
 
+# 推理线程数的默认上限：过大的线程数会在推理瞬间打满全部物理核，
+# 与游戏抢占 CPU 导致卡顿；2 线程在推理时长与资源占用间取得平衡。
+DEFAULT_MAX_INFERENCE_THREADS = 2
+
 
 @dataclass
 class RecognitionConfig:
@@ -22,7 +26,13 @@ class RecognitionConfig:
         use_gpu: 是否使用 GPU 加速。
         model_dir: 自定义模型目录路径，None 表示使用默认模型。
         enable_text_direction: 是否启用文字方向检测（横排/竖排）。
+            游戏字幕恒为横排，默认关闭可省去每帧的方向分类器推理。
         capture_region: 捕获区域坐标，用于推导底部对白带 ROI 以聚焦对话文本；None 表示全屏。
+        max_inference_threads: CPU 推理的线程数上限（onnxruntime intra-op/inter-op 线程池）；
+            None 或负值表示不限制（用满全部物理核）。设为较小值可为游戏让出 CPU 核。
+        crop_dialogue_band: 是否仅裁剪捕获图像底部对白带送入 OCR。
+            字幕仅位于画面底部区域，裁剪后可显著减少推理像素量、降低 CPU 占用；
+            对 bytes 输入不生效（保持原图），Web 端行为不受影响。
     """
 
     language: str = "ch"
@@ -31,6 +41,8 @@ class RecognitionConfig:
     model_dir: str | None = None
     enable_text_direction: bool = False
     capture_region: Region | None = None
+    max_inference_threads: int | None = DEFAULT_MAX_INFERENCE_THREADS
+    crop_dialogue_band: bool = False
 
 
 @dataclass

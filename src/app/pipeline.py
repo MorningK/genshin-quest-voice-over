@@ -15,6 +15,7 @@ import numpy as np
 
 from src.app.player import MiniAudioPlayer, WinsoundPlayer
 from src.app.textproc import TextTracker
+from src.recognition.preprocess import crop_dialogue_band
 
 if TYPE_CHECKING:
     from src.app.config import AppConfig
@@ -178,7 +179,7 @@ class VoiceOverApp:
         self._tracker = TextTracker()
         self._stop_event = threading.Event()
         self._initialized = False
-        # 上一帧降采样缓存副本，用于帧相似度比对；None 表示尚无缓存（首帧）
+        # 上一次送入比对的对白带降采样副本，用于帧变化门控；None 表示尚无缓存（首帧）
         self._last_frame: np.ndarray | None = None
 
     def start(self) -> int:
@@ -264,7 +265,19 @@ class VoiceOverApp:
             return False
 
         self._initialized = True
-        logger.info("All engines initialized. Capture fps=%d", self._config.fps)
+        # 输出当前优化工作模式：手动选区时自动停用带裁剪与带级门控，
+        # 便于实机排查时快速确认各开关的实际生效状态
+        mode = (
+            "manual-region"
+            if self._config.region is not None
+            else ("full-frame" if self._config.full_frame else "band-optimized")
+        )
+        logger.info(
+            "All engines initialized. Capture fps=%d, region=%s, mode=%s",
+            self._config.fps,
+            self._config.region,
+            mode,
+        )
         return True
 
     def _run_loop(self) -> None:
@@ -286,26 +299,50 @@ class VoiceOverApp:
             else:
                 next_time = time.perf_counter()
 
-    def _frame_skipped(self, current: np.ndarray) -> bool:
-        """判断当前帧是否与上一帧完全一致，应跳过本次处理。
+    def _extract_gating_band(self, image: Any) -> Any:
+        """提取用于帧门控比对的底部对白带区域。
 
-        仅对像素完全一致的帧跳过，避免全帧平均差异把局部字幕变化稀释掉、
-        导致新对白被误跳过而漏读。比对前先按步长降采样，既节省内存，
-        也能容忍捕获后端偶发的轻微像素噪声；任一像素不同即视为画面有变化。
+        字幕恒定出现在画面底部对白带内，仅对该区域做变化检测可避免上半屏
+        游戏动画反复触发无效 OCR。以下情形返回捕获原帧（即整个比对范围）：
+
+        - ``--full-frame``：关闭带级优化回退旧行为；
+        - 手动指定 region（--region / --select-region）：用户选区本身就是
+          预裁剪好的对白带，若再叠加自动裁剪会切掉选区上部，导致那里的
+          字幕变化不被门控感知而漏读，因此直接对整个选区做变化检测。
+
+        OCR 输入由识别后端依据同一配置决定是否裁剪（手动选区时同样不裁），
+        两侧判定均源自 AppConfig 的派生字段，天然保持一致。
 
         Args:
-            current: 当前帧图像（numpy uint8 BGR 数组）。
+            image: 捕获的当前帧图像（numpy 数组）。
 
         Returns:
-            True 表示当前帧与上一帧完全一致，应跳过后续处理。
+            对白带区域或整帧图像；非 numpy 输入原样返回。
+        """
+        if self._config.full_frame or self._config.region is not None or not isinstance(image, np.ndarray):
+            return image
+        return crop_dialogue_band(image)
+
+    def _frame_skipped(self, candidate: np.ndarray) -> bool:
+        """判断候选比对帧是否与缓存完全一致，应跳过本次 OCR 及后续处理。
+
+        仅对像素完全一致的帧跳过，避免平均差异把局部字幕变化稀释掉、
+        导致新对白被误跳过而漏读。调用方已按步长完成降采样，本方法只做
+        等形比较；任一像素不同即视为画面有变化。失败语义由调用方约定：
+        只有识别成功后才提交新缓存，OCR 异常时保持旧缓存以便下帧重试。
+
+        Args:
+            candidate: 当前帧（或其对白带）经步长降采样后的副本。
+
+        Returns:
+            True 表示与上一候选完全一致，应跳过后续处理。
         """
         last = self._last_frame
-        step = self._config.frame_similarity_step
         if last is None:
             return False
-        if last.shape != current[::step, ::step].shape:
+        if last.shape != candidate.shape:
             return False
-        return bool(np.array_equal(last, current[::step, ::step]))
+        return np.array_equal(last, candidate)
 
     def _process_frame(self) -> None:
         """执行单帧处理：捕获、识别、判断变化并合成播放。"""
@@ -319,13 +356,17 @@ class VoiceOverApp:
         capture_elapsed = (time.perf_counter() - step_start) * 1000
         logger.debug("Step [capture] took %.1f ms", capture_elapsed)
 
-        # 帧缓存：与上一帧完全一致时跳过 OCR 及后续处理，降低无效计算
-        if self._frame_skipped(result.image):
-            return
-        # 计算降采样候选帧副本（copy 避免后端复用缓冲导致比对失真），
-        # 但延迟到 recognize 成功后提交，OCR 临时失败时不更新缓存以便下次重试。
+        # 帧门控：仅对决定字幕内容的底部对白带做变化检测（--full-frame 时退化为
+        # 整帧旧行为）。游戏上半屏动画不再触发重识别，字幕静止期间 OCR 调用趋近于零；
+        # 字幕出现的第一帧必然带来对白带像素变化，仍会被及时捕获（延迟不劣化）。
+        # 计算降采样候选副本需 copy，避免后端复用缓冲导致比对失真；
+        # 提交延迟到 recognize 成功之后，OCR 临时失败时不更新缓存以便下次重试。
+        band = self._extract_gating_band(result.image)
         step = self._config.frame_similarity_step
-        candidate_frame = result.image[::step, ::step].copy()
+        candidate_frame = band[::step, ::step].copy()
+        if self._frame_skipped(candidate_frame):
+            logger.debug("Dialogue band unchanged, skip OCR.")
+            return
 
         step_start = time.perf_counter()
         recognition = self._recognizer.recognize(result.image)

@@ -75,6 +75,35 @@ def _box_height(box: RecognitionBox) -> int:
     return max(ys) - min(ys)
 
 
+def crop_dialogue_band(image: object) -> object:
+    """裁剪图像底部对白带区域，仅保留字幕可能出现的高度区间。
+
+    《原神》任务对话字幕恒定位于画面底部约 35% 高度内（见
+    ``_DIALOGUE_BAND_RATIO``），裁掉上部画面可将送入 OCR 的像素量减少约
+    60–70%，显著降低推理耗时与 CPU 占用。裁剪复用与 ``extract_dialogue_boxes``
+    相同的对白带比例常量，保证裁剪空间与 ROI 过滤判定一致：x 中心比例判定
+    不受垂直裁剪影响，名字标签/碎片的高度阈值按图像高度等比缩放仍兼容。
+    仅对 numpy 数组输入生效（桌面捕获路径）；bytes 编码图像（Web 上传路径）
+    原样透传，保证 Web 端行为不变。
+
+    Args:
+        image: 输入图像，numpy 数组（BGR 或灰度）或编码字节。
+
+    Returns:
+        仅含底部对白带的 numpy 数组；bytes 输入或 numpy 不可用时原样返回。
+
+    Raises:
+        ValueError: 输入 numpy 数组为空时抛出。
+    """
+    if np is None or not isinstance(image, np.ndarray):
+        return image
+    if image.size == 0:
+        raise ValueError("Input image is empty.")
+    height = image.shape[0]
+    band_height = max(1, round(height * _DIALOGUE_BAND_RATIO))
+    return image[height - band_height :, :]
+
+
 def downscale_to_max_side(image: object, max_side: int) -> object:
     """将图像等比缩放，使最长边不超过上限，降低送入 OCR 的推理计算量。
 
@@ -180,18 +209,25 @@ def preprocess_frame(
 
 
 def extract_dialogue_boxes(
-    boxes: list[RecognitionBox], image_shape: tuple[int, int] | None = None
+    boxes: list[RecognitionBox],
+    image_shape: tuple[int, int] | None = None,
+    *,
+    pre_cropped: bool = False,
 ) -> list[RecognitionBox]:
     """从 OCR 结果中过滤出底部对白带文本，抑制游戏 UI 噪声。
 
-    依据坐标启发式排除：右侧选项菜单（x 中心偏右）、右上性能数据
-    （对白带之上的顶部区域）、过大的 NPC 名字标签、过碎的装饰元素。
-    坐标判断基于图像自身像素尺寸（image_shape），与 OCR 框坐标空间一致；
-    高度阈值按 ref_height 相对 1080p 标定等比缩放，适配降采样后的输入分辨率。
+    依据坐标启发式排除：右侧选项菜单（x 中心偏右）、对白带之上的顶部区域、
+    过大的 NPC 名字标签、过碎的装饰元素。坐标判断基于图像自身像素尺寸
+    （image_shape），与 OCR 框坐标空间一致；高度阈值按 ref_height 相对
+    1080p 标定等比缩放，适配降采样后的输入分辨率。
 
     Args:
         boxes: OCR 识别出的全部文字区域。
         image_shape: 图像尺寸 (height, width)；为 None 时按 1080x1920 占位比例推导。
+        pre_cropped: 识别输入是否已预先裁剪为对白带区域。为 True 时不再执行
+            "带之上区域" 的比例剔除——送入图像本身就是对白带，若仍按全帧比例
+            划定下边界会把真正的字幕误划出带外；残留噪声由 x 比例规则与
+            文本级 UI 噪声正则兜底过滤。
 
     Returns:
         仅含对白带文本的识别区域列表，按输入原本的相对顺序。
@@ -215,8 +251,9 @@ def extract_dialogue_boxes(
     dialogue_min_h = max(1, round(_DIALOGUE_MIN_HEIGHT * height_scale))
     name_tag_max_h = max(_NAME_TAG_MAX_HEIGHT, round(_NAME_TAG_MAX_HEIGHT * height_scale))
 
-    # 对白带下边界：从图像底部向上回退 DIALOGUE_BAND_RATIO 高度
-    band_top = ref_height * (1.0 - _DIALOGUE_BAND_RATIO)
+    # 对白带下边界：从图像底部向上回退 DIALOGUE_BAND_RATIO 高度；
+    # 输入已预裁剪为对白带时置为图像顶端，保留全部水平带内内容
+    band_top = 0.0 if pre_cropped else ref_height * (1.0 - _DIALOGUE_BAND_RATIO)
 
     dialogue: list[RecognitionBox] = []
     for box in boxes:

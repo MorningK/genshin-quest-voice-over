@@ -24,6 +24,7 @@ from src.recognition.base import (
 )
 from src.recognition.preprocess import (
     DEFAULT_MAX_INPUT_SIZE,
+    crop_dialogue_band,
     downscale_to_max_side,
     extract_dialogue_boxes,
     preprocess_frame,
@@ -114,7 +115,11 @@ class PaddleOCREngine(TextRecognizer):
         if self._config is None:
             raise RuntimeError("PaddleOCR engine is not configured.")
 
-        processed = downscale_to_max_side(image, self._MAX_INPUT_SIZE)
+        # 先按需裁剪底部对白带再缩小最长边：裁剪发生在原始分辨率上，
+        # 字幕带区完整保留；bytes 输入（Web 上传路径）经 crop_dialogue_band 原样透传。
+        # 裁剪可减少约 60–70% 推理像素量、显著降低 CPU 占用，两端预处理保持一致。
+        ocr_input = crop_dialogue_band(image) if self._config.crop_dialogue_band else image
+        processed = downscale_to_max_side(ocr_input, self._MAX_INPUT_SIZE)
         # 送入 OCR 前做灰度/对比度增强与轻度放大，提升小字号字幕召回率；
         # 传入 max_output_size 约束增强后尺寸，不超过 PaddlePaddle 防崩溃上限 _MAX_INPUT_SIZE。
         # 缺 OpenCV 时 preprocess_frame 返回 (processed, False), 不生成 roi_text
@@ -170,7 +175,8 @@ class PaddleOCREngine(TextRecognizer):
             except ImportError:
                 _np = None  # type: ignore[assignment]
             image_shape = enhanced.shape[:2] if _np is not None and isinstance(enhanced, _np.ndarray) else None
-            roi_boxes = extract_dialogue_boxes(ordered_boxes, image_shape)
+            # 输入已预裁剪为对白带时告知过滤器跳过带顶比例剔除，与 RapidOCR 行为一致
+            roi_boxes = extract_dialogue_boxes(ordered_boxes, image_shape, pre_cropped=self._config.crop_dialogue_band)
             # 逐框过滤游戏 UI 噪声（UID/手柄提示等），命中噪声的框不计入 roi_text，
             # 避免锚定模式在与其他文本同帧时无法匹配
             roi_parts = [b.text for b in roi_boxes if filter_ui_noise(b.text) is not None]
