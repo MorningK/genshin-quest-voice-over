@@ -1,13 +1,14 @@
 """显示器信息收集与坐标转换模块。
 
 用于多显示器（扩展屏幕）环境下枚举各显示器信息，并提供
-"全局逻辑坐标 → 目标显示器相对物理坐标" 的转换能力，供交互式
+"全局逻辑坐标 → 目标显示器相对坐标" 的转换能力，供交互式
 框选模块复用。
 
 实现仅依赖 Python 标准库与 Windows API（ctypes），无第三方依赖：
 - ``EnumDisplayMonitors`` 获取各显示器的逻辑像素边界与主屏标记。
 - ``GetScaleFactorForMonitor`` 获取每块显示器独立的 DPI 缩放因子。
-- 物理边界 = 逻辑边界 × 该显示器缩放因子（DXCam/MSS 使用物理像素）。
+- 捕获后端（MSS/DXCam）在帧缓冲层取帧，返回的是显示器物理分辨率，
+  故捕获 region 坐标须换算为物理像素 = 逻辑坐标 × 该显示器缩放因子。
 """
 
 from __future__ import annotations
@@ -31,7 +32,8 @@ class _MonitorInfo:
 
     Attributes:
         logical: 逻辑像素边界（相对虚拟桌面左上角），与 tkinter 全局坐标同系。
-        physical: 物理像素边界（相对虚拟桌面左上角），与 MSS/DXCam 全局坐标同系。
+        physical: 物理像素边界（相对虚拟桌面左上角），与捕获后端
+            （MSS/DXCam）帧分辨率同系。
         scale: 该显示器的 DPI 缩放因子（物理 / 逻辑）。
         is_primary: 是否主显示器。
         index: 捕获后端显示器索引（0=主屏）。
@@ -141,6 +143,10 @@ def enumerate_monitors() -> list[_MonitorInfo]:
 
     result: list[_MonitorInfo] = []
     for index, lm in enumerate(logical_monitors):
+        # 捕获后端（MSS/DXCam）在帧缓冲层取帧，返回显示器物理分辨率；
+        # 故 region 坐标须换算为物理像素 = 逻辑坐标 × 该显示器 DPI 缩放因子。
+        # GetScaleFactorForMonitor 在 DPI-unaware 进程下返回 1.0（无缩放），
+        # 在 DPI-aware 进程下返回真实缩放，天然兼容两种进程模式。
         physical = Region(
             left=_round(lm.left * lm.scale),
             top=_round(lm.top * lm.scale),
@@ -214,7 +220,7 @@ def locate_region(global_region: Region, monitors: Sequence[_MonitorInfo] | None
     target = _find_monitor(monitors, center_x, center_y)
 
     # SelectedRegion 契约仅支持单显示器相对区域；区域跨越显示器边界时
-    # 各边界可能属于不同缩放的显示器，强行转换会得到错误物理坐标，故拒绝。
+    # 各边界可能属于不同缩放的显示器，强行转换会得到错误坐标，故拒绝。
     logical_origin = target.logical
     if (
         global_region.left < logical_origin.left
@@ -223,6 +229,8 @@ def locate_region(global_region: Region, monitors: Sequence[_MonitorInfo] | None
         or global_region.bottom > logical_origin.bottom
     ):
         raise RuntimeError("Selected region spans multiple monitors, selection rejected.")
+    # 捕获后端帧为显示器物理分辨率，region 须换算为物理像素：
+    # 相对显示器左上角的逻辑偏移 × 该显示器 DPI 缩放因子。
     rel = Region(
         left=_round((global_region.left - logical_origin.left) * target.scale),
         top=_round((global_region.top - logical_origin.top) * target.scale),

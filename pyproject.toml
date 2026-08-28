@@ -63,6 +63,9 @@ playback = [
 web = [
     "uvicorn>=0.30.0",
 ]
+gui = [
+    "customtkinter>=6.0.0",
+]
 
 [dependency-groups]
 dev = [

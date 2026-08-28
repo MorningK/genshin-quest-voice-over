@@ -5,11 +5,15 @@
 用户可在任意屏幕上拖拽框选捕获区域，程序自动识别框选所在显示器，
 并把坐标转换为相对该显示器的物理像素坐标返回。
 
-对外仅暴露纯函数 :func:`select_region`。
+对外暴露两个入口：
+- :func:`select_region`：CLI 专用，内部自建 tkinter 根窗口。
+- :func:`select_region_on_root`：GUI 专用，复用调用方传入的既有根窗口，
+  避免新建第二个 Tk 根或嵌套 mainloop()。
 """
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from typing import TYPE_CHECKING
 
@@ -221,9 +225,59 @@ class _RegionSelector:
             self._on_done(result)
 
 
-def select_region() -> SelectedRegion | None:
-    """弹出覆盖所有显示器的全屏遮罩，让用户鼠标拖拽框选捕获区域。
+def _select_on_root(root: Any) -> SelectedRegion | None:
+    """在给定的 tkinter 根窗口上创建遮罩并阻塞等待框选完成（共享实现）。
 
+    通过哨兵窗口 + ``wait_window`` 在既有事件循环内阻塞等待，不新建第二个
+    Tk 根窗口、不调用顶层 ``mainloop()``。哨兵窗口随框选结束一并销毁以解除等待。
+
+    Args:
+        root: 已存在的 tkinter 根窗口（Tk/CTk 实例），遮罩 Toplevel 挂在其下。
+
+    Returns:
+        SelectedRegion 表示选中的区域与显示器索引；用户按 Esc 或发生异常时返回 None。
+    """
+    import tkinter as tk
+
+    result: SelectedRegion | None = None
+    sentinel = tk.Toplevel(root)
+    sentinel.withdraw()
+
+    def _set_result(r: SelectedRegion | None) -> None:
+        nonlocal result
+        result = r
+        with contextlib.suppress(Exception):  # noqa: BLE001 - 窗口销毁竞态，静默忽略
+            sentinel.destroy()
+
+    try:
+        selector = _RegionSelector(root, _set_result)
+        selector.run()
+        # 阻塞等待哨兵销毁（框选结束），运行局部事件循环处理遮罩交互
+        root.wait_window(sentinel)
+    except Exception as exc:  # noqa: BLE001 - 初始化或框选异常不应中断应用，回退全屏
+        logger.exception("Region selection failed, fall back to full screen: %s", exc)
+        result = None
+    finally:
+        try:
+            sentinel.destroy()
+        except Exception:  # noqa: BLE001 - 资源释放阶段异常不应向上传播
+            logger.exception("Failed to destroy sentinel window.")
+
+    if result is not None:
+        logger.info(
+            "Selected monitor %d, region %s",
+            result.monitor_index,
+            result.region,
+        )
+    else:
+        logger.info("Region selection cancelled, using full screen.")
+    return result
+
+
+def select_region() -> SelectedRegion | None:
+    """CLI 入口：自建 tkinter 根窗口后调用共享框选实现。
+
+    弹出覆盖所有显示器的全屏遮罩，让用户鼠标拖拽框选捕获区域。
     阻塞直至用户完成框选或取消。结果坐标已转换为目标显示器的相对物理像素。
 
     Returns:
@@ -239,37 +293,28 @@ def select_region() -> SelectedRegion | None:
             "tkinter is not available. Please use --region to specify capture coordinates manually."
         ) from exc
 
-    result: SelectedRegion | None = None
-    root: Any | None = None
-
-    def _set_result(r: SelectedRegion | None) -> None:
-        nonlocal result
-        result = r
-        if root is not None:
-            root.quit()
-
+    root = tk.Tk()
+    root.withdraw()  # 隐藏主窗口，仅显示框选遮罩
     try:
-        root = tk.Tk()
-        root.withdraw()  # 隐藏主窗口，仅显示框选遮罩
-        selector = _RegionSelector(root, _set_result)
-        selector.run()
-        root.mainloop()
-    except Exception as exc:  # noqa: BLE001 - 初始化或框选异常不应中断应用，回退全屏
-        logger.exception("Region selection failed, fall back to full screen: %s", exc)
-        result = None
+        return _select_on_root(root)
     finally:
-        if root is not None:
-            try:
-                root.destroy()
-            except Exception:  # noqa: BLE001 - 资源释放阶段异常不应向上传播
-                logger.exception("Failed to destroy tkinter root.")
+        try:
+            root.destroy()
+        except Exception:  # noqa: BLE001 - 资源释放阶段异常不应向上传播
+            logger.exception("Failed to destroy tkinter root.")
 
-    if result is not None:
-        logger.info(
-            "Selected monitor %d, region %s",
-            result.monitor_index,
-            result.region,
-        )
-    else:
-        logger.info("Region selection cancelled, using full screen.")
-    return result
+
+def select_region_on_root(root: Any) -> SelectedRegion | None:
+    """GUI 入口：复用调用方传入的既有根窗口进行框选。
+
+    供 GUI（如 CustomTkinter 主窗口）在自身事件循环内调用，避免新建第二个
+    Tk 根窗口或嵌套 mainloop()，从而消除两套 Tcl 解释器共享进程级全局状态
+    （如 ``tkinter._default_root``）带来的竞态隐患。
+
+    Args:
+        root: 已存在的 tkinter 根窗口（Tk/CTk 实例），遮罩 Toplevel 挂在其下。
+
+    Returns:
+        SelectedRegion 表示选中的区域与显示器索引；用户按 Esc 或发生异常时返回 None。
+    """
+    return _select_on_root(root)

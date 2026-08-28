@@ -108,12 +108,17 @@ class DXCamCapture(ScreenCapture):
         return CaptureResult(image=image, timestamp=time.time(), region=region)
 
     def release(self) -> None:
-        """释放 DXCam 捕获引擎占用的资源。"""
+        """释放 DXCam 捕获引擎占用的资源。
+
+        必须调用 DXCamera.release() 使 is_released=True：DXCam 按
+        (device, output, backend) 缓存实例，仅 stop() 不会清除缓存，
+        下次 create() 会返回旧实例，导致新 region 等参数不生效甚至卡死。
+        """
         if self._camera is not None:
             try:
-                self._camera.stop()
+                self._camera.release()
             except Exception:  # noqa: BLE001 - 释放阶段的异常不应向上传播
-                logger.exception("Failed to stop DXCam camera.")
+                logger.exception("Failed to release DXCam camera.")
             self._camera = None
         self._last_frame = None
         self._initialized = False
