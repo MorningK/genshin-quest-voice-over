@@ -85,21 +85,36 @@ class _RegionSelector:
             return
 
         for info in monitors:
-            overlay = self._create_overlay(info)
-            if overlay is not None:
-                self._overlays.append(overlay)
+            self._overlays.append(self._create_overlay(info))
 
         if not self._overlays:
             self._on_done(None)
 
-    def _create_overlay(self, info: _MonitorInfo) -> _Overlay | None:
+    def _destroy_overlays(self) -> None:
+        """销毁并清空已创建的遮罩窗口（幂等）。
+
+        单个窗口销毁失败仅记录日志，不影响其余窗口的清理；调用结束后
+        ``_overlays`` 必为空，因此可安全重复调用（正常结束与异常回滚共用）。
+        """
+        for overlay in self._overlays:
+            try:
+                overlay.top_level.destroy()
+            except Exception:  # noqa: BLE001 - 单窗口销毁失败不中断整体清理
+                logger.exception("Failed to destroy overlay window.")
+        self._overlays.clear()
+
+    def _create_overlay(self, info: _MonitorInfo) -> _Overlay:
         """为单块显示器创建全屏遮罩窗口。
 
         Args:
             info: 显示器几何信息。
 
         Returns:
-            _Overlay 实例；创建失败时返回 None。
+            _Overlay 实例。
+
+        Raises:
+            Exception: Toplevel 创建成功但后续初始化失败时，销毁该窗口后向上抛出；
+                Toplevel 创建本身失败时直接向上抛出。
         """
         logical = info.logical
         width = logical.width
@@ -107,28 +122,35 @@ class _RegionSelector:
         origin = Point(x=logical.left, y=logical.top)
 
         overlay = self._tk.Toplevel(self._root)
-        overlay.overrideredirect(True)
-        overlay.attributes("-topmost", True)
-        # 用全局逻辑坐标定位窗口：WxH+X+Y
-        overlay.geometry(f"{width}x{height}+{logical.left}+{logical.top}")
-        overlay.configure(bg="black", cursor="crosshair")
-        overlay.attributes("-alpha", 0.35)
+        try:
+            overlay.overrideredirect(True)
+            overlay.attributes("-topmost", True)
+            # 用全局逻辑坐标定位窗口：WxH+X+Y
+            overlay.geometry(f"{width}x{height}+{logical.left}+{logical.top}")
+            overlay.configure(bg="black", cursor="crosshair")
+            overlay.attributes("-alpha", 0.35)
 
-        canvas = self._tk.Canvas(overlay, width=width, height=height, bg="black", highlightthickness=0)
-        canvas.pack(fill="both", expand=True)
-        canvas.create_text(
-            width // 2,
-            height // 2,
-            text=_HELP_TEXT,
-            fill="white",
-            font=("Microsoft YaHei", 14),
-        )
+            canvas = self._tk.Canvas(overlay, width=width, height=height, bg="black", highlightthickness=0)
+            canvas.pack(fill="both", expand=True)
+            canvas.create_text(
+                width // 2,
+                height // 2,
+                text=_HELP_TEXT,
+                fill="white",
+                font=("Microsoft YaHei", 14),
+            )
 
-        canvas.bind("<ButtonPress-1>", self._on_press)
-        canvas.bind("<B1-Motion>", self._on_drag)
-        canvas.bind("<ButtonRelease-1>", self._on_release)
-        overlay.bind("<Escape>", self._on_escape)
-        overlay.focus_set()
+            canvas.bind("<ButtonPress-1>", self._on_press)
+            canvas.bind("<B1-Motion>", self._on_drag)
+            canvas.bind("<ButtonRelease-1>", self._on_release)
+            overlay.bind("<Escape>", self._on_escape)
+            overlay.focus_set()
+        except Exception:
+            # 所有权尚未移交 _overlays，此处必须自毁，避免残留孤儿置顶窗口
+            logger.exception("Failed to initialize overlay window, destroying it.")
+            with contextlib.suppress(Exception):  # noqa: BLE001 - 销毁失败不应掩盖原始异常
+                overlay.destroy()
+            raise
 
         return _Overlay(top_level=overlay, canvas=canvas, origin=origin)
 
@@ -215,13 +237,8 @@ class _RegionSelector:
             result: 框选结果，None 表示取消。
         """
         try:
-            for ov in self._overlays:
-                try:
-                    ov.top_level.destroy()
-                except Exception:  # noqa: BLE001 - 单窗口销毁失败不中断整体清理
-                    logger.exception("Failed to destroy overlay window.")
+            self._destroy_overlays()
         finally:
-            self._overlays.clear()
             self._on_done(result)
 
 
@@ -240,6 +257,7 @@ def _select_on_root(root: Any) -> SelectedRegion | None:
     import tkinter as tk
 
     result: SelectedRegion | None = None
+    selector: _RegionSelector | None = None
     sentinel = tk.Toplevel(root)
     sentinel.withdraw()
 
@@ -258,6 +276,9 @@ def _select_on_root(root: Any) -> SelectedRegion | None:
         logger.exception("Region selection failed, fall back to full screen: %s", exc)
         result = None
     finally:
+        # 初始化/框选异常时可能已创建部分遮罩，必须在此销毁，否则残留置顶窗口阻塞操作
+        if selector is not None:
+            selector._destroy_overlays()
         try:
             sentinel.destroy()
         except Exception:  # noqa: BLE001 - 资源释放阶段异常不应向上传播

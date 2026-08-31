@@ -704,8 +704,11 @@ class MainWindow:
                 logger.debug("Failed to cancel log poll timer.")
             self._poll_after_id = None
         logging.getLogger().removeHandler(self._log_handler)
-        if self._runner.state is RunnerState.RUNNING:
-            self._runner.stop()
+        state = self._runner.state
+        if state in (RunnerState.RUNNING, RunnerState.STOPPING):
+            # STOPPING 说明停止信号已发出，无需重复调用 stop()
+            if state is RunnerState.RUNNING:
+                self._runner.stop()
             # 降级路径为阻塞播放，长对白可能持续数秒，需等待其自然结束以释放资源
             self._runner.join(5.0)
         self._root.destroy()
