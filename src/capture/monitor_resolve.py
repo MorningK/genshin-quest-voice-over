@@ -163,8 +163,39 @@ def collect_mss_monitors(sct: Any) -> list[MonitorRef]:
                 is_primary=bool(monitor.get("is_primary", False)),
             )
         )
+    _mark_primary(refs)
     logger.debug("MSS monitors collected: %d.", len(refs))
     return refs
+
+
+def _mark_primary(refs: list[MonitorRef]) -> None:
+    """在 MSS 候选缺失主屏标记时，按 Windows 主屏物理矩形补标 ``is_primary``。
+
+    MSS 的 Windows 后端不产出 ``is_primary`` 字段（仅 ``mss.base`` 的
+    ``primary_monitor`` 属性读取它），未指定显示器时会退化成"枚举序首屏"，
+    在扩展屏场景下可能抓错屏幕，故退回 Win32 主屏矩形匹配。
+
+    Args:
+        refs: 已收集的 MSS 候选列表，命中时就地补标。
+    """
+    if any(ref.is_primary for ref in refs):
+        return
+    try:
+        # 延迟导入：仅在需要时依赖 Win32 枚举，避免在 capture 层产生模块级硬依赖
+        from src.app.monitor import primary_physical_rect
+    except ImportError:
+        logger.debug("Win32 monitor helper unavailable, keep MSS enumeration order.")
+        return
+
+    primary = primary_physical_rect()
+    if primary is None:
+        return
+    matched = _match_rect(refs, primary)
+    if matched is None:
+        logger.debug("Primary monitor rect %s not found among MSS monitors.", primary)
+        return
+    matched.is_primary = True
+    logger.debug("MSS primary monitor resolved by Win32 rect: index=%s.", matched.output_idx)
 
 
 def _get_dxcam_factory(dxcam_module: Any) -> Any | None:

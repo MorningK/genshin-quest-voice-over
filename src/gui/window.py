@@ -405,14 +405,31 @@ class MainWindow:
         self._monitor_menu.configure(values=self._monitor_labels)
         self._monitor_var.set(self._monitor_labels[-1])
 
+    def _clear_region(self) -> None:
+        """清空手动区域坐标并退回全屏捕获模式。
+
+        换屏或失去有效选区后调用，避免旧坐标与新显示器组合下发。
+        """
+        self._region_mode_var.set("fullscreen")
+        for entry in self._region_entries:
+            entry.configure(state="normal")
+            entry.delete(0, "end")
+        self._on_region_mode_change()
+
     def _on_monitor_picked(self, choice: str) -> None:
         """响应显示器下拉框切换。
+
+        手动区域是相对所选显示器的物理坐标，换屏后旧坐标会指向错误的屏幕区域，
+        故此处清空已选区域并退回全屏模式，要求重新框选。
 
         Args:
             choice: 选中的下拉项文案（CTkOptionMenu 回调参数，未使用其取值）。
         """
         target = self._current_monitor()
         logger.info("Capture monitor set to '%s' (device=%s).", choice, target.device_name or "unspecified")
+        if self._region_mode_var.get() == "manual":
+            self._clear_region()
+            logger.info("Capture monitor changed, manual region cleared. Please select the region again.")
 
     def _build_voice_group(self) -> None:
         """构建「语音」分组：音色与 vits 模型路径。"""

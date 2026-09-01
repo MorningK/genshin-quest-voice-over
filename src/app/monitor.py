@@ -118,6 +118,12 @@ def _enumerate_raw_monitors() -> list[_RawMonitor]:
 
     user32 = ctypes.windll.user32
     shcore = ctypes.windll.shcore
+    # HMONITOR 是指针宽度的句柄：不声明 argtypes 时 ctypes 会按 c_int（32 位）
+    # 传参，64 位进程下可能被截断或直接抛 ArgumentError，故显式声明签名。
+    user32.GetMonitorInfoW.argtypes = [ctypes.c_void_p, ctypes.POINTER(MONITORINFOEX)]
+    user32.GetMonitorInfoW.restype = wintypes.BOOL
+    shcore.GetScaleFactorForMonitor.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.UINT)]
+    shcore.GetScaleFactorForMonitor.restype = ctypes.HRESULT
     primary_flag = 1  # MONITORINFOF_PRIMARY
 
     monitors: list[_RawMonitor] = []
@@ -125,10 +131,15 @@ def _enumerate_raw_monitors() -> list[_RawMonitor]:
     def _cb(_hmon: int, _hdc: int, _lprect: int, _lparam: int) -> int:
         info = MONITORINFOEX()
         info.cbSize = ctypes.sizeof(MONITORINFOEX)
-        user32.GetMonitorInfoW(_hmon, ctypes.byref(info))
+        if not user32.GetMonitorInfoW(_hmon, ctypes.byref(info)):
+            # 失败时结构体仍是全零，继续追加会污染枚举结果，跳过该显示器
+            logger.warning("GetMonitorInfoW failed, skip monitor.")
+            return 1  # 返回 True 继续枚举其余显示器
         rect = info.rcMonitor
         scale_value = wintypes.UINT()
         shcore.GetScaleFactorForMonitor(_hmon, ctypes.byref(scale_value))
+        if scale_value.value <= 0:
+            logger.debug("GetScaleFactorForMonitor returned no scale, fall back to 1.0.")
         scale = scale_value.value / 100.0 if scale_value.value > 0 else 1.0
         monitors.append(
             _RawMonitor(
@@ -238,6 +249,27 @@ def enumerate_monitors() -> list[_MonitorInfo]:
 
     logger.debug("Monitors enumerated: awareness=%d, count=%d.", awareness, len(result))
     return result
+
+
+def primary_physical_rect() -> Region | None:
+    """返回主显示器在虚拟桌面中的物理像素矩形。
+
+    供捕获后端在自身不提供主屏标记时（如 MSS 的 Windows 后端）反查主屏身份，
+    矩形与 :func:`enumerate_monitors` 产出的 ``physical`` 同坐标系（虚拟桌面物理像素）。
+
+    Returns:
+        主显示器的物理矩形；非 Windows 平台、枚举失败或没有主屏标记时返回 None。
+    """
+    try:
+        monitors = enumerate_monitors()
+    except RuntimeError as exc:
+        logger.debug("Primary monitor unavailable: %s", exc)
+        return None
+    for info in monitors:
+        if info.is_primary:
+            return info.physical
+    logger.debug("No monitor carries the primary flag.")
+    return None
 
 
 def _find_monitor(monitors: Sequence[_MonitorInfo], x: int, y: int) -> _MonitorInfo:
