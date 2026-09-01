@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from src.common import Region
+from src.common import MonitorTarget, Region
 
 
 @dataclass
@@ -16,18 +16,22 @@ class CaptureConfig:
     """屏幕捕获配置。
 
     Attributes:
-        region: 截取区域，None 表示全屏。
+        region: 截取区域，None 表示整块显示器。坐标为相对 monitor 显示器的物理像素。
         fps: 目标帧率，控制每秒截取次数。
         window_title: 目标窗口标题关键词，用于自动定位游戏窗口。
-        monitor_index: 多显示器时指定显示器索引，0 为主显示器。
+        monitor: 目标显示器标识。各捕获后端的显示器序号语义不同，须由后端
+            按设备名/物理矩形解析；未指定（MonitorTarget 默认值）时取主显示器。
         output_format: 输出图像格式，默认 "bgr"（numpy 数组），可选 "rgb"、"pil"。
+        save_last_frame: 调试用开关，为 True 且日志处于 debug 级别时，
+            将每次捕获的最新一帧覆盖写入应用本地目录，始终只保留最后一张。
     """
 
     region: Region | None = None
     fps: int = 4
     window_title: str | None = None
-    monitor_index: int = 0
+    monitor: MonitorTarget = field(default_factory=MonitorTarget)
     output_format: Literal["bgr", "rgb", "pil"] = "bgr"
+    save_last_frame: bool = False
 
 
 @dataclass

@@ -1,13 +1,15 @@
-"""应用引导公共逻辑：日志初始化与进程降权。
+"""应用引导公共逻辑：日志初始化、进程降权与 DPI 感知。
 
 自 main.py 提取，供 CLI（main.py）与 GUI（gui.py）两个入口复用，
-保证两种入口的日志行为与调度优先级策略完全一致。
+保证两种入口的日志行为、调度优先级策略与屏幕坐标系完全一致。
 """
 
 from __future__ import annotations
 
 import logging
 import sys
+
+logger = logging.getLogger(__name__)
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -23,6 +25,62 @@ def setup_logging(verbose: bool = False) -> None:
         # force 覆盖可能已存在的根 handler，确保 -v 能稳定生效
         force=True,
     )
+
+
+# 进程 DPI 感知模式取值（PROCESS_DPI_AWARENESS，shellscalingapi.h）
+DPI_AWARENESS_UNAWARE = 0  # 系统按 96 DPI 虚拟化，坐标一律为逻辑像素
+DPI_AWARENESS_SYSTEM = 1  # 坐标按主屏缩放换算为逻辑像素
+DPI_AWARENESS_PER_MONITOR = 2  # 坐标即物理像素
+
+
+def ensure_dpi_awareness() -> int:
+    """把进程钉死为 per-monitor DPI aware，并返回实际感知模式。
+
+    Win32 返回的显示器矩形与 tkinter 坐标（``event.x_root``、窗口几何）始终
+    处于同一坐标系，但具体是逻辑像素还是物理像素取决于本模式：per-monitor
+    aware 下两者都是物理像素。两个入口必须在创建任何窗口前调用本函数，
+    否则枚举显示器与框选坐标的换算因子无法唯一确定。
+
+    与 CustomTkinter / dxcam / mss 后续的同类调用取值一致（均请求 2），
+    重复调用会被系统拒绝，此处仅记 debug 日志后沿用实际模式。
+
+    Returns:
+        实际感知模式：0=unaware、1=system aware、2=per-monitor aware；
+        非 Windows 平台或 API 不可用时返回 2（后续按物理像素处理）。
+    """
+    if sys.platform != "win32":
+        return DPI_AWARENESS_PER_MONITOR
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        ctypes.windll.shcore.SetProcessDpiAwareness(DPI_AWARENESS_PER_MONITOR)
+        awareness = wintypes.UINT()
+        ctypes.windll.shcore.GetProcessDpiAwareness(None, ctypes.byref(awareness))
+        return int(awareness.value)
+    except (OSError, AttributeError, ValueError) as exc:
+        # 感知模式往往已被依赖库提前设置，此时无法更改，按实际值继续即可
+        logger.debug("Failed to set per-monitor DPI awareness, keep current: %s", exc)
+        return read_dpi_awareness()
+
+
+def read_dpi_awareness() -> int:
+    """读取当前进程的 DPI 感知模式，读取失败时按 per-monitor aware 处理。
+
+    Returns:
+        0=unaware、1=system aware、2=per-monitor aware。
+    """
+    if sys.platform != "win32":
+        return DPI_AWARENESS_PER_MONITOR
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        awareness = wintypes.UINT()
+        ctypes.windll.shcore.GetProcessDpiAwareness(None, ctypes.byref(awareness))
+        return int(awareness.value)
+    except (OSError, AttributeError, ValueError):
+        return DPI_AWARENESS_PER_MONITOR
 
 
 def lower_process_priority(logger: logging.Logger) -> None:

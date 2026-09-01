@@ -272,10 +272,12 @@ class VoiceOverApp:
             if self._config.region is not None
             else ("full-frame" if self._config.full_frame else "band-optimized")
         )
+        monitor = self._config.monitor
         logger.info(
-            "All engines initialized. Capture fps=%d, region=%s, mode=%s",
+            "All engines initialized. Capture fps=%d, region=%s, monitor=%s, mode=%s",
             self._config.fps,
             self._config.region,
+            monitor.device_name or (f"index={monitor.index}" if not monitor.is_unspecified else "primary(default)"),
             mode,
         )
         return True

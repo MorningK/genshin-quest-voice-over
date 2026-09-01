@@ -20,7 +20,7 @@ except ImportError as exc:  # pragma: no cover - 依赖缺失时的启动指引
     print("缺少 CustomTkinter 依赖，请先执行：uv sync --extra gui")
     raise SystemExit(1) from exc
 
-from src.app.bootstrap import lower_process_priority, setup_logging
+from src.app.bootstrap import ensure_dpi_awareness, lower_process_priority, setup_logging
 from src.gui.window import MainWindow
 
 logger = logging.getLogger(__name__)
@@ -36,8 +36,12 @@ def main() -> int:
         退出码，0 表示正常退出。
     """
     setup_logging(verbose=False)
+    # 必须在创建 CTk 根窗口之前：窗口一旦创建，感知模式就不可再改，
+    # 显示器枚举与框选坐标的换算因子将无法唯一确定
+    awareness = ensure_dpi_awareness()
     # 启动早期即降权：让 OCR 推理爆发时系统调度器优先保障游戏进程（与 CLI 一致）
     lower_process_priority(logger)
+    logger.debug("Process DPI awareness: %d", awareness)
     # 统一深色模式并加载原神自定义主题色板
     # （DPI 感知由 CustomTkinter 自动处理，无需手动调用）
     ctk.set_appearance_mode("dark")

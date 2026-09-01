@@ -22,8 +22,9 @@ from src.app.config import (
     DEFAULT_VOICE,
     AppConfig,
 )
+from src.app.monitor import enumerate_monitors
 from src.app.region_selector import select_region_on_root
-from src.common import Region, SelectedRegion
+from src.common import MonitorTarget, Region, SelectedRegion
 from src.gui.log_handler import TextLogHandler
 from src.gui.runner import AppRunner, RunnerState
 from src.recognition import DEFAULT_MAX_INFERENCE_THREADS
@@ -49,6 +50,9 @@ _BUTTON_GAP = 12  # 控制区按钮水平间距
 
 # 日志区轮询刷新间隔（毫秒）：主线程定时排空日志队列，批量追加到日志区
 _LOG_POLL_MS = 100
+
+# 显示器下拉框首项：未指定显示器（各捕获后端按自身语义回落主屏）
+_PRIMARY_MONITOR_LABEL = "主显示器"
 
 # 动态状态色（运行状态元素色圆点，需随状态切换，无法由静态主题文件表达）
 _STATUS_COLORS: dict[RunnerState, str] = {
@@ -79,6 +83,20 @@ _STATE_VIEWS: dict[RunnerState, _StateView] = {
     RunnerState.STOPPING: _StateView(dot=_STATUS_COLORS[RunnerState.STOPPING], text="停止中…"),
     RunnerState.FAILED: _StateView(dot=_STATUS_COLORS[RunnerState.FAILED], text="启动失败"),
 }
+
+
+def _monitor_label(target: MonitorTarget) -> str:
+    """生成显示器下拉项文案，形如 ``1 · DISPLAY2 · 2560x1440``。
+
+    Args:
+        target: 显示器标识。
+
+    Returns:
+        下拉框展示文案。
+    """
+    name = target.device_name.rsplit("\\", 1)[-1] if target.device_name else "未知"
+    size = f"{target.physical.width}x{target.physical.height}" if target.physical else "未知"
+    return f"{target.index} · {name} · {size}"
 
 
 class _ValidationError(ValueError):
@@ -115,7 +133,6 @@ class MainWindow:
             root: customtkinter 根窗口实例。
         """
         self._root = root
-        self._monitor_index = 0
         self._config_widgets: list[Any] = []
         # 日志轮询定时器 id；None 表示未启动或已取消
         self._poll_after_id: str | None = None
@@ -325,9 +342,77 @@ class MainWindow:
             self._region_entries.append(entry)
             self._config_widgets.append(entry)
 
-        self._monitor_label = ctk.CTkLabel(body, text="显示器：-", font=self._font_main, text_color="#A8A293")
-        self._monitor_label.grid(row=1, column=8, sticky="e", pady=(_INNER_PADY, 0))
+        self._monitor_targets: list[MonitorTarget] = [MonitorTarget()]
+        self._monitor_labels: list[str] = [_PRIMARY_MONITOR_LABEL]
+        self._fill_monitor_options()
+        self._monitor_var = ctk.StringVar(value=self._monitor_labels[0])
+        monitor_menu = ctk.CTkOptionMenu(
+            body,
+            values=self._monitor_labels,
+            variable=self._monitor_var,
+            command=self._on_monitor_picked,
+            width=200,
+            font=self._font_main,
+        )
+        monitor_menu.grid(row=1, column=8, sticky="e", pady=(_INNER_PADY, 0))
+        self._monitor_menu = monitor_menu
+        self._config_widgets.append(monitor_menu)
         self._on_region_mode_change()
+
+    def _fill_monitor_options(self) -> None:
+        """枚举显示器填充下拉框选项。
+
+        枚举失败（非 Windows 等）时仅保留首项"主显示器"，由各捕获后端
+        按自身语义回落主屏，不影响其余功能。
+        """
+        try:
+            monitors = enumerate_monitors()
+        except RuntimeError as exc:
+            logger.warning("Monitor enumeration failed, only primary default available: %s", exc)
+            return
+        for info in monitors:
+            target = MonitorTarget(index=info.index, device_name=info.device_name, physical=info.physical)
+            self._monitor_targets.append(target)
+            self._monitor_labels.append(_monitor_label(target))
+
+    def _current_monitor(self) -> MonitorTarget:
+        """读取显示器下拉框当前选中的目标。
+
+        Returns:
+            显示器标识；文案无法匹配时退回未指定（主屏）语义。
+        """
+        label = self._monitor_var.get()
+        if label in self._monitor_labels:
+            return self._monitor_targets[self._monitor_labels.index(label)]
+        return MonitorTarget()
+
+    def _sync_monitor_picker(self, target: MonitorTarget) -> None:
+        """把显示器下拉框同步到给定目标。
+
+        Args:
+            target: 需要选中的显示器标识；未命中已有选项时追加一项，
+                未指定（主屏）时回到首项。
+        """
+        if target.is_unspecified:
+            self._monitor_var.set(self._monitor_labels[0])
+            return
+        for index, existing in enumerate(self._monitor_targets):
+            if target.device_name and existing.device_name == target.device_name:
+                self._monitor_var.set(self._monitor_labels[index])
+                return
+        self._monitor_targets.append(target)
+        self._monitor_labels.append(_monitor_label(target))
+        self._monitor_menu.configure(values=self._monitor_labels)
+        self._monitor_var.set(self._monitor_labels[-1])
+
+    def _on_monitor_picked(self, choice: str) -> None:
+        """响应显示器下拉框切换。
+
+        Args:
+            choice: 选中的下拉项文案（CTkOptionMenu 回调参数，未使用其取值）。
+        """
+        target = self._current_monitor()
+        logger.info("Capture monitor set to '%s' (device=%s).", choice, target.device_name or "unspecified")
 
     def _build_voice_group(self) -> None:
         """构建「语音」分组：音色与 vits 模型路径。"""
@@ -592,7 +677,7 @@ class MainWindow:
             ocr_backend=self._ocr_var.get(),
             tts_backend=self._tts_var.get(),
             region=region,
-            monitor_index=self._monitor_index if region is not None else 0,
+            monitor=self._current_monitor(),
             fps=fps,
             language=self._language_var.get().strip() or DEFAULT_LANGUAGE,
             use_gpu=self._gpu_var.get(),
@@ -691,8 +776,7 @@ class MainWindow:
             entry.configure(state="normal")
             entry.delete(0, "end")
             entry.insert(0, str(value))
-        self._monitor_index = selected.monitor_index
-        self._monitor_label.configure(text=f"显示器：{self._monitor_index}")
+        self._sync_monitor_picker(selected.monitor)
 
     def _on_close(self) -> None:
         """窗口关闭：停止日志轮询与管道、摘除日志并销毁窗口。"""

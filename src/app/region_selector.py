@@ -44,7 +44,7 @@ class _Overlay:
         Args:
             top_level: tkinter Toplevel 窗口。
             canvas: 遮罩内的 Canvas 画布。
-            origin: 该显示器逻辑区域左上角在虚拟桌面中的全局坐标。
+            origin: 该显示器矩形左上角在虚拟桌面中的全局坐标（进程坐标系）。
         """
         self.top_level = top_level
         self.canvas = canvas
@@ -56,7 +56,7 @@ class _RegionSelector:
     """tkinter 多显示器全屏框选选择器内部实现。
 
     负责为每块显示器创建全屏遮罩窗口、处理鼠标拖拽与键盘事件，
-    以全局逻辑坐标记录框选范围，最终转换为 SelectedRegion 回调返回。
+    以全局进程坐标记录框选范围，最终转换为 SelectedRegion 回调返回。
     """
 
     def __init__(self, root: Any, on_done: Callable[[SelectedRegion | None], None]) -> None:
@@ -106,6 +106,10 @@ class _RegionSelector:
     def _create_overlay(self, info: _MonitorInfo) -> _Overlay:
         """为单块显示器创建全屏遮罩窗口。
 
+        遮罩几何使用进程坐标系矩形（``info.rect``）：它与 tkinter 的窗口
+        几何、``event.x_root`` 同坐标系，直接定位即可精确覆盖该显示器；
+        物理矩形（``info.physical``）仅供捕获后端使用，不能拿来定位窗口。
+
         Args:
             info: 显示器几何信息。
 
@@ -116,17 +120,17 @@ class _RegionSelector:
             Exception: Toplevel 创建成功但后续初始化失败时，销毁该窗口后向上抛出；
                 Toplevel 创建本身失败时直接向上抛出。
         """
-        logical = info.logical
-        width = logical.width
-        height = logical.height
-        origin = Point(x=logical.left, y=logical.top)
+        rect = info.rect
+        width = rect.width
+        height = rect.height
+        origin = Point(x=rect.left, y=rect.top)
 
         overlay = self._tk.Toplevel(self._root)
         try:
             overlay.overrideredirect(True)
             overlay.attributes("-topmost", True)
             # 用全局逻辑坐标定位窗口：WxH+X+Y
-            overlay.geometry(f"{width}x{height}+{logical.left}+{logical.top}")
+            overlay.geometry(f"{width}x{height}+{rect.left}+{rect.top}")
             overlay.configure(bg="black", cursor="crosshair")
             overlay.attributes("-alpha", 0.35)
 
@@ -161,11 +165,11 @@ class _RegionSelector:
         拖拽方向可能使 right<left 或 bottom<top，统一取 min/max。
 
         Args:
-            start: 按下时的全局起始点。
-            end: 松开时的全局结束点。
+            start: 按下时的全局起始点（进程坐标系）。
+            end: 松开时的全局结束点（进程坐标系）。
 
         Returns:
-            归一化后的全局逻辑区域。
+            归一化后的全局区域（进程坐标系）。
         """
         return Region(
             left=min(start.x, end.x),
@@ -285,9 +289,13 @@ def _select_on_root(root: Any) -> SelectedRegion | None:
             logger.exception("Failed to destroy sentinel window.")
 
     if result is not None:
+        target = result.monitor
+        size = f"{target.physical.width}x{target.physical.height}" if target.physical else "unknown"
         logger.info(
-            "Selected monitor %d, region %s",
-            result.monitor_index,
+            "Selected monitor %d (device=%s, %s), region %s",
+            target.index,
+            target.device_name or "unknown",
+            size,
             result.region,
         )
     else:

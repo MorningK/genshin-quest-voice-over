@@ -13,6 +13,8 @@ from typing import Any
 import numpy as np
 
 from src.capture.base import CaptureConfig, CaptureResult, ScreenCapture
+from src.capture.debug import FrameDumper
+from src.capture.monitor_resolve import MonitorRef, collect_mss_monitors, pick_monitor, primary_or_first
 from src.common import Region
 
 logger = logging.getLogger(__name__)
@@ -32,6 +34,7 @@ class MSSCapture(ScreenCapture):
         self._sct: Any = None
         self._config: CaptureConfig | None = None
         self._monitor: dict[str, int] | None = None
+        self._dumper: FrameDumper | None = None
         self._initialized = False
 
     def initialize(self, config: CaptureConfig) -> bool:
@@ -44,7 +47,7 @@ class MSSCapture(ScreenCapture):
             True 表示初始化成功。
 
         Raises:
-            RuntimeError: 依赖库 mss 未安装，或创建截屏会话失败时抛出。
+            RuntimeError: 依赖库 mss 未安装、创建截屏会话失败或显示器解析失败时抛出。
         """
         try:
             import mss  # pyrefly: ignore=missing-import  # 惰性导入，避免未安装时启动失败
@@ -54,19 +57,19 @@ class MSSCapture(ScreenCapture):
         self._sct = mss.mss()
         self._config = config
 
+        # MSS 的 monitors 是 EnumDisplayMonitors 原序（0 号为"全部显示器"
+        # 虚拟项），与项目内部的"主屏优先"编号不同源，须按物理矩形解析；
+        # 未指定显示器时取带 is_primary 标记的那一项，保证默认主屏全屏。
+        index = self._resolve_monitor_index(config)
+        base = self._sct.monitors[index]
+
         if config.region is None:
-            # 全屏模式：使用指定显示器或主显示器
-            monitors = self._sct.monitors
-            index = config.monitor_index + 1
-            # index < 1 表示 monitor_index < 0，会错误选中 MSS 的"全部显示器"虚拟项
-            if index < 1 or index >= len(monitors):
-                raise RuntimeError(f"Monitor index {config.monitor_index} is out of range.")
-            self._monitor = monitors[index]
+            # 整屏模式：直接使用该显示器
+            self._monitor = base
         else:
-            # 区域模式：region 为相对 monitor_index 显示器的物理坐标，
+            # 区域模式：region 为相对目标显示器的物理坐标，
             # MSS 需要的是绝对屏幕坐标，须加上该显示器的物理原点偏移。
             region = config.region
-            base = self._sct.monitors[config.monitor_index + 1]
             self._monitor = {
                 "left": base["left"] + region.left,
                 "top": base["top"] + region.top,
@@ -74,9 +77,41 @@ class MSSCapture(ScreenCapture):
                 "height": region.height,
             }
 
+        self._dumper = FrameDumper(enabled=config.save_last_frame)
         self._initialized = True
-        logger.info("MSS capture initialized.")
+        logger.info(
+            "MSS capture initialized (monitor=%d, rect=%s, frame_dump=%s).",
+            index,
+            self._monitor,
+            config.save_last_frame,
+        )
         return True
+
+    def _resolve_monitor_index(self, config: CaptureConfig) -> int:
+        """解析目标显示器在 ``sct.monitors`` 中的下标。
+
+        Args:
+            config: 捕获配置参数。
+
+        Returns:
+            合法的 monitors 下标（>= 1）。
+
+        Raises:
+            RuntimeError: 无可用显示器，或解析结果越界时抛出。
+        """
+        refs = collect_mss_monitors(self._sct)
+        if not refs:
+            raise RuntimeError("No monitor available for MSS capture.")
+        if config.monitor.is_unspecified:
+            fallback = primary_or_first(refs, default=refs[0].output_idx or 1)
+        else:
+            # 兜底沿用项目内部编号（+1 跳过虚拟项），并收敛到最后一个真实显示器
+            last = refs[-1].output_idx or 1
+            fallback = MonitorRef(output_idx=min(config.monitor.index + 1, last))
+        index = pick_monitor(refs, config.monitor, fallback).output_idx or 1
+        if index >= len(self._sct.monitors):
+            raise RuntimeError(f"Monitor index {index} is out of range (monitors={len(self._sct.monitors)}).")
+        return index
 
     def capture(self) -> CaptureResult:
         """执行一次屏幕截取。
@@ -96,8 +131,9 @@ class MSSCapture(ScreenCapture):
             raise RuntimeError("Failed to grab frame from MSS.") from exc
 
         # MSS 返回 BGRA bytes，转换为 numpy 数组并提取 BGR
-        frame = np.frombuffer(shot.bgra, dtype=np.uint8).reshape(shot.height, shot.width, 4)
-        image = frame[:, :, :3].copy()
+        shot_frame = np.frombuffer(shot.bgra, dtype=np.uint8).reshape(shot.height, shot.width, 4)
+        image = shot_frame[:, :, :3].copy()
+        self._dump_frame(image)
 
         if self._config is not None and self._config.region is not None:
             region = self._config.region
@@ -106,6 +142,16 @@ class MSSCapture(ScreenCapture):
             region = Region(0, 0, width, height)
 
         return CaptureResult(image=image, timestamp=time.time(), region=region)
+
+    def _dump_frame(self, image: Any) -> None:
+        """按调试开关转储当前帧到应用本地目录。
+
+        Args:
+            image: 捕获帧（numpy 数组）。
+        """
+        if self._dumper is None or self._config is None:
+            return
+        self._dumper.dump(image, self._config.output_format)
 
     def release(self) -> None:
         """释放 MSS 捕获引擎占用的资源。"""
@@ -116,6 +162,7 @@ class MSSCapture(ScreenCapture):
                 logger.exception("Failed to close MSS session.")
             self._sct = None
         self._monitor = None
+        self._dumper = None
         self._initialized = False
         logger.info("MSS capture released.")
 

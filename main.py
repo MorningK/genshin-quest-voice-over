@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import sys
 
-from src.app.bootstrap import lower_process_priority, setup_logging
+from src.app.bootstrap import ensure_dpi_awareness, lower_process_priority, setup_logging
 from src.app.config import parse_args
 from src.app.pipeline import VoiceOverApp
 
@@ -25,9 +25,13 @@ def main(argv: list[str] | None = None) -> int:
     """
     logger = logging.getLogger(__name__)
 
+    # 必须在 parse_args 之前：--select-region 会创建 Tk 窗口并读取屏幕坐标，
+    # 感知模式一旦被 Tk/依赖库抢先设置就无法再改，坐标换算随之失去唯一性
+    awareness = ensure_dpi_awareness()
     config = parse_args(argv)
     # 先解析参数再配置日志，避免 basicConfig 在已有 handler 时失效导致 verbose 不生效
     setup_logging(config.verbose)
+    logger.debug("Process DPI awareness: %d", awareness)
     # 启动早期即降权：让 OCR 推理爆发时系统调度器优先保障游戏进程
     lower_process_priority(logger)
     logger.info(
