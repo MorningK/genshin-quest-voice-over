@@ -93,9 +93,24 @@ uv run python main.py --tts vits --tts-model-path /path/to/model
 # 显式指定 OCR 后端：rapid（RapidOCR，需 ocr-rapid-gpu 组）或 paddle（PaddleOCR，需官方源安装 GPU 版）
 uv run python main.py --ocr rapid --gpu
 uv run python main.py --ocr paddle --gpu
+
+# 忽略本地保存的配置，按内置默认值启动（退出后默认值会覆盖原配置，等效于重置）
+uv run python main.py --reset-config
 ```
 
 按 `Ctrl+C` 优雅停止并释放资源。
+
+### 配置自动保存与恢复
+
+每次运行**退出时**会自动把本次实际生效的配置写入 `~/.genshin-quest-voice-over/config.json`，
+下次启动时自动加载并应用，无需重复设置捕获区域、显示器、音色、帧率等选项。
+
+- **优先级**：内置默认值 ← 配置文件历史值 ← 命令行显式参数。命令行只覆盖显式传入的项，
+  其余沿用上次保存的值（例如上次框选过区域，本次直接 `uv run python main.py` 即可沿用）。
+- **GUI**：启动时把历史配置回填到表单，点击"开始"与关闭窗口时各保存一次。
+- **恢复默认**：加 `--reset-config` 启动，或删除该配置文件。
+- **异常降级**：文件缺失、内容损坏或结构版本不兼容时自动回退内置默认值并打印日志，不会中断启动；
+  配置文件中的非法字段（如 `right < left` 的区域）会被逐项丢弃，其余字段照常生效。
 
 ## Web 服务（FastAPI + SSE）
 

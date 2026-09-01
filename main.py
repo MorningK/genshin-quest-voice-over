@@ -10,7 +10,7 @@ import logging
 import sys
 
 from src.app.bootstrap import ensure_dpi_awareness, lower_process_priority, setup_logging
-from src.app.config import parse_args
+from src.app.config import parse_args, save_config
 from src.app.pipeline import VoiceOverApp
 
 
@@ -48,6 +48,9 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         logger.info("Interrupted by user.")
         return 0
+    finally:
+        # 无论正常退出还是中断，都把本次实际生效的配置落盘，供下次启动沿用
+        save_config(config)
 
 
 if __name__ == "__main__":
