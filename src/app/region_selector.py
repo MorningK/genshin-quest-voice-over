@@ -5,11 +5,15 @@
 用户可在任意屏幕上拖拽框选捕获区域，程序自动识别框选所在显示器，
 并把坐标转换为相对该显示器的物理像素坐标返回。
 
-对外仅暴露纯函数 :func:`select_region`。
+对外暴露两个入口：
+- :func:`select_region`：CLI 专用，内部自建 tkinter 根窗口。
+- :func:`select_region_on_root`：GUI 专用，复用调用方传入的既有根窗口，
+  避免新建第二个 Tk 根或嵌套 mainloop()。
 """
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from typing import TYPE_CHECKING
 
@@ -40,7 +44,7 @@ class _Overlay:
         Args:
             top_level: tkinter Toplevel 窗口。
             canvas: 遮罩内的 Canvas 画布。
-            origin: 该显示器逻辑区域左上角在虚拟桌面中的全局坐标。
+            origin: 该显示器矩形左上角在虚拟桌面中的全局坐标（进程坐标系）。
         """
         self.top_level = top_level
         self.canvas = canvas
@@ -52,7 +56,7 @@ class _RegionSelector:
     """tkinter 多显示器全屏框选选择器内部实现。
 
     负责为每块显示器创建全屏遮罩窗口、处理鼠标拖拽与键盘事件，
-    以全局逻辑坐标记录框选范围，最终转换为 SelectedRegion 回调返回。
+    以全局进程坐标记录框选范围，最终转换为 SelectedRegion 回调返回。
     """
 
     def __init__(self, root: Any, on_done: Callable[[SelectedRegion | None], None]) -> None:
@@ -81,50 +85,76 @@ class _RegionSelector:
             return
 
         for info in monitors:
-            overlay = self._create_overlay(info)
-            if overlay is not None:
-                self._overlays.append(overlay)
+            self._overlays.append(self._create_overlay(info))
 
         if not self._overlays:
             self._on_done(None)
 
-    def _create_overlay(self, info: _MonitorInfo) -> _Overlay | None:
+    def _destroy_overlays(self) -> None:
+        """销毁并清空已创建的遮罩窗口（幂等）。
+
+        单个窗口销毁失败仅记录日志，不影响其余窗口的清理；调用结束后
+        ``_overlays`` 必为空，因此可安全重复调用（正常结束与异常回滚共用）。
+        """
+        for overlay in self._overlays:
+            try:
+                overlay.top_level.destroy()
+            except Exception:  # noqa: BLE001 - 单窗口销毁失败不中断整体清理
+                logger.exception("Failed to destroy overlay window.")
+        self._overlays.clear()
+
+    def _create_overlay(self, info: _MonitorInfo) -> _Overlay:
         """为单块显示器创建全屏遮罩窗口。
+
+        遮罩几何使用进程坐标系矩形（``info.rect``）：它与 tkinter 的窗口
+        几何、``event.x_root`` 同坐标系，直接定位即可精确覆盖该显示器；
+        物理矩形（``info.physical``）仅供捕获后端使用，不能拿来定位窗口。
 
         Args:
             info: 显示器几何信息。
 
         Returns:
-            _Overlay 实例；创建失败时返回 None。
+            _Overlay 实例。
+
+        Raises:
+            Exception: Toplevel 创建成功但后续初始化失败时，销毁该窗口后向上抛出；
+                Toplevel 创建本身失败时直接向上抛出。
         """
-        logical = info.logical
-        width = logical.width
-        height = logical.height
-        origin = Point(x=logical.left, y=logical.top)
+        rect = info.rect
+        width = rect.width
+        height = rect.height
+        origin = Point(x=rect.left, y=rect.top)
 
         overlay = self._tk.Toplevel(self._root)
-        overlay.overrideredirect(True)
-        overlay.attributes("-topmost", True)
-        # 用全局逻辑坐标定位窗口：WxH+X+Y
-        overlay.geometry(f"{width}x{height}+{logical.left}+{logical.top}")
-        overlay.configure(bg="black", cursor="crosshair")
-        overlay.attributes("-alpha", 0.35)
+        try:
+            overlay.overrideredirect(True)
+            overlay.attributes("-topmost", True)
+            # 用全局逻辑坐标定位窗口：WxH+X+Y
+            overlay.geometry(f"{width}x{height}+{rect.left}+{rect.top}")
+            overlay.configure(bg="black", cursor="crosshair")
+            overlay.attributes("-alpha", 0.35)
 
-        canvas = self._tk.Canvas(overlay, width=width, height=height, bg="black", highlightthickness=0)
-        canvas.pack(fill="both", expand=True)
-        canvas.create_text(
-            width // 2,
-            height // 2,
-            text=_HELP_TEXT,
-            fill="white",
-            font=("Microsoft YaHei", 14),
-        )
+            canvas = self._tk.Canvas(overlay, width=width, height=height, bg="black", highlightthickness=0)
+            canvas.pack(fill="both", expand=True)
+            canvas.create_text(
+                width // 2,
+                height // 2,
+                text=_HELP_TEXT,
+                fill="white",
+                font=("Microsoft YaHei", 14),
+            )
 
-        canvas.bind("<ButtonPress-1>", self._on_press)
-        canvas.bind("<B1-Motion>", self._on_drag)
-        canvas.bind("<ButtonRelease-1>", self._on_release)
-        overlay.bind("<Escape>", self._on_escape)
-        overlay.focus_set()
+            canvas.bind("<ButtonPress-1>", self._on_press)
+            canvas.bind("<B1-Motion>", self._on_drag)
+            canvas.bind("<ButtonRelease-1>", self._on_release)
+            overlay.bind("<Escape>", self._on_escape)
+            overlay.focus_set()
+        except Exception:
+            # 所有权尚未移交 _overlays，此处必须自毁，避免残留孤儿置顶窗口
+            logger.exception("Failed to initialize overlay window, destroying it.")
+            with contextlib.suppress(Exception):  # noqa: BLE001 - 销毁失败不应掩盖原始异常
+                overlay.destroy()
+            raise
 
         return _Overlay(top_level=overlay, canvas=canvas, origin=origin)
 
@@ -135,11 +165,11 @@ class _RegionSelector:
         拖拽方向可能使 right<left 或 bottom<top，统一取 min/max。
 
         Args:
-            start: 按下时的全局起始点。
-            end: 松开时的全局结束点。
+            start: 按下时的全局起始点（进程坐标系）。
+            end: 松开时的全局结束点（进程坐标系）。
 
         Returns:
-            归一化后的全局逻辑区域。
+            归一化后的全局区域（进程坐标系）。
         """
         return Region(
             left=min(start.x, end.x),
@@ -211,19 +241,72 @@ class _RegionSelector:
             result: 框选结果，None 表示取消。
         """
         try:
-            for ov in self._overlays:
-                try:
-                    ov.top_level.destroy()
-                except Exception:  # noqa: BLE001 - 单窗口销毁失败不中断整体清理
-                    logger.exception("Failed to destroy overlay window.")
+            self._destroy_overlays()
         finally:
-            self._overlays.clear()
             self._on_done(result)
 
 
-def select_region() -> SelectedRegion | None:
-    """弹出覆盖所有显示器的全屏遮罩，让用户鼠标拖拽框选捕获区域。
+def _select_on_root(root: Any) -> SelectedRegion | None:
+    """在给定的 tkinter 根窗口上创建遮罩并阻塞等待框选完成（共享实现）。
 
+    通过哨兵窗口 + ``wait_window`` 在既有事件循环内阻塞等待，不新建第二个
+    Tk 根窗口、不调用顶层 ``mainloop()``。哨兵窗口随框选结束一并销毁以解除等待。
+
+    Args:
+        root: 已存在的 tkinter 根窗口（Tk/CTk 实例），遮罩 Toplevel 挂在其下。
+
+    Returns:
+        SelectedRegion 表示选中的区域与显示器索引；用户按 Esc 或发生异常时返回 None。
+    """
+    import tkinter as tk
+
+    result: SelectedRegion | None = None
+    selector: _RegionSelector | None = None
+    sentinel = tk.Toplevel(root)
+    sentinel.withdraw()
+
+    def _set_result(r: SelectedRegion | None) -> None:
+        nonlocal result
+        result = r
+        with contextlib.suppress(Exception):  # noqa: BLE001 - 窗口销毁竞态，静默忽略
+            sentinel.destroy()
+
+    try:
+        selector = _RegionSelector(root, _set_result)
+        selector.run()
+        # 阻塞等待哨兵销毁（框选结束），运行局部事件循环处理遮罩交互
+        root.wait_window(sentinel)
+    except Exception as exc:  # noqa: BLE001 - 初始化或框选异常不应中断应用，回退全屏
+        logger.exception("Region selection failed, fall back to full screen: %s", exc)
+        result = None
+    finally:
+        # 初始化/框选异常时可能已创建部分遮罩，必须在此销毁，否则残留置顶窗口阻塞操作
+        if selector is not None:
+            selector._destroy_overlays()
+        try:
+            sentinel.destroy()
+        except Exception:  # noqa: BLE001 - 资源释放阶段异常不应向上传播
+            logger.exception("Failed to destroy sentinel window.")
+
+    if result is not None:
+        target = result.monitor
+        size = f"{target.physical.width}x{target.physical.height}" if target.physical else "unknown"
+        logger.info(
+            "Selected monitor %d (device=%s, %s), region %s",
+            target.index,
+            target.device_name or "unknown",
+            size,
+            result.region,
+        )
+    else:
+        logger.info("Region selection cancelled, using full screen.")
+    return result
+
+
+def select_region() -> SelectedRegion | None:
+    """CLI 入口：自建 tkinter 根窗口后调用共享框选实现。
+
+    弹出覆盖所有显示器的全屏遮罩，让用户鼠标拖拽框选捕获区域。
     阻塞直至用户完成框选或取消。结果坐标已转换为目标显示器的相对物理像素。
 
     Returns:
@@ -239,37 +322,28 @@ def select_region() -> SelectedRegion | None:
             "tkinter is not available. Please use --region to specify capture coordinates manually."
         ) from exc
 
-    result: SelectedRegion | None = None
-    root: Any | None = None
-
-    def _set_result(r: SelectedRegion | None) -> None:
-        nonlocal result
-        result = r
-        if root is not None:
-            root.quit()
-
+    root = tk.Tk()
+    root.withdraw()  # 隐藏主窗口，仅显示框选遮罩
     try:
-        root = tk.Tk()
-        root.withdraw()  # 隐藏主窗口，仅显示框选遮罩
-        selector = _RegionSelector(root, _set_result)
-        selector.run()
-        root.mainloop()
-    except Exception as exc:  # noqa: BLE001 - 初始化或框选异常不应中断应用，回退全屏
-        logger.exception("Region selection failed, fall back to full screen: %s", exc)
-        result = None
+        return _select_on_root(root)
     finally:
-        if root is not None:
-            try:
-                root.destroy()
-            except Exception:  # noqa: BLE001 - 资源释放阶段异常不应向上传播
-                logger.exception("Failed to destroy tkinter root.")
+        try:
+            root.destroy()
+        except Exception:  # noqa: BLE001 - 资源释放阶段异常不应向上传播
+            logger.exception("Failed to destroy tkinter root.")
 
-    if result is not None:
-        logger.info(
-            "Selected monitor %d, region %s",
-            result.monitor_index,
-            result.region,
-        )
-    else:
-        logger.info("Region selection cancelled, using full screen.")
-    return result
+
+def select_region_on_root(root: Any) -> SelectedRegion | None:
+    """GUI 入口：复用调用方传入的既有根窗口进行框选。
+
+    供 GUI（如 CustomTkinter 主窗口）在自身事件循环内调用，避免新建第二个
+    Tk 根窗口或嵌套 mainloop()，从而消除两套 Tcl 解释器共享进程级全局状态
+    （如 ``tkinter._default_root``）带来的竞态隐患。
+
+    Args:
+        root: 已存在的 tkinter 根窗口（Tk/CTk 实例），遮罩 Toplevel 挂在其下。
+
+    Returns:
+        SelectedRegion 表示选中的区域与显示器索引；用户按 Esc 或发生异常时返回 None。
+    """
+    return _select_on_root(root)

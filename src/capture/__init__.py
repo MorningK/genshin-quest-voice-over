@@ -6,12 +6,14 @@
 
 from src.capture.backends import DXCamCapture, MSSCapture
 from src.capture.base import CaptureConfig, CaptureResult, ScreenCapture
+from src.capture.debug import FrameDumper
 from src.common import Region
 
 __all__ = [
     "CaptureConfig",
     "CaptureResult",
     "DXCamCapture",
+    "FrameDumper",
     "MSSCapture",
     "Region",
     "ScreenCapture",

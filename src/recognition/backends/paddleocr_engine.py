@@ -121,6 +121,10 @@ class PaddleOCREngine(TextRecognizer):
         import numpy as _np
 
         band_was_cropped = isinstance(image, _np.ndarray) and self._config.crop_dialogue_band
+        # 垂直过滤的放宽条件与"是否真的裁剪图像"不同：手动选区（capture_region）
+        # 不再裁剪（选区本身就是对白带），但同样必须跳过带顶比例剔除，
+        # 否则选区上部的字幕会被误判为噪声而漏读。判定统一取自配置派生属性。
+        band_input = isinstance(image, _np.ndarray) and self._config.is_band_input
         # 先按需裁剪底部对白带再缩小最长边：裁剪发生在原始分辨率上，
         # 字幕带区完整保留。裁剪可减少约 60–70% 推理像素量、显著降低 CPU 占用，
         # 两端预处理保持一致。
@@ -178,8 +182,9 @@ class PaddleOCREngine(TextRecognizer):
         if applied:
             # _np 为方法开头的运行时惰性导入（文件头 np 仅类型检查可见）
             image_shape = enhanced.shape[:2] if isinstance(enhanced, _np.ndarray) else None
-            # 输入已实际预裁剪为对白带时才跳过带顶比例剔除，与 RapidOCR 行为一致
-            roi_boxes = extract_dialogue_boxes(ordered_boxes, image_shape, pre_cropped=band_was_cropped)
+            # 输入已天然等价于对白带（自动裁剪或手动选区）时跳过带顶比例剔除，
+            # 与 RapidOCR 行为保持一致
+            roi_boxes = extract_dialogue_boxes(ordered_boxes, image_shape, pre_cropped=band_input)
             # 逐框过滤游戏 UI 噪声（UID/手柄提示等），命中噪声的框不计入 roi_text，
             # 避免锚定模式在与其他文本同帧时无法匹配
             roi_parts = [b.text for b in roi_boxes if filter_ui_noise(b.text) is not None]

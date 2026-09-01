@@ -13,6 +13,8 @@ from typing import Any, ClassVar
 import numpy as np
 
 from src.capture.base import CaptureConfig, CaptureResult, ScreenCapture
+from src.capture.debug import FrameDumper
+from src.capture.monitor_resolve import MonitorRef, collect_dxcam_outputs, pick_monitor
 from src.common import Region
 
 logger = logging.getLogger(__name__)
@@ -38,6 +40,7 @@ class DXCamCapture(ScreenCapture):
         self._camera: Any = None
         self._config: CaptureConfig | None = None
         self._last_frame: Any = None
+        self._dumper: FrameDumper | None = None
         self._initialized = False
 
     def initialize(self, config: CaptureConfig) -> bool:
@@ -59,8 +62,17 @@ class DXCamCapture(ScreenCapture):
                 "dxcam is not installed. Run `uv sync --extra capture` to enable DXCam capture."
             ) from exc
 
+        # DXCam 的 output_idx 是 DXGI 输出序号，与项目内部的"主屏优先"
+        # 编号不同源，须按设备名/物理矩形解析；未指定显示器时交回 dxcam
+        # 自行选主屏（output_idx=None），绝不能退化成 0——那是 DXGI 枚举序。
+        fallback = MonitorRef() if config.monitor.is_unspecified else MonitorRef(output_idx=config.monitor.index)
+        ref = pick_monitor(collect_dxcam_outputs(dxcam), config.monitor, fallback)
+        if config.region is not None:
+            self._validate_region(config.region, ref)
+
         create_kwargs: dict[str, Any] = {
-            "output_idx": config.monitor_index,
+            "device_idx": ref.device_idx,
+            "output_idx": ref.output_idx,
             "output_color": self._COLOR_MAP[config.output_format],  # pyrefly: ignore=bad-argument-type
         }
         if config.region is not None:
@@ -73,9 +85,40 @@ class DXCamCapture(ScreenCapture):
         if self._camera is None:
             raise RuntimeError("Failed to create DXCam camera instance.")
 
+        self._dumper = FrameDumper(enabled=config.save_last_frame)
         self._initialized = True
-        logger.info("DXCam capture initialized.")
+        logger.info(
+            "DXCam capture initialized (device=%d, output=%s, frame=%dx%d, frame_dump=%s).",
+            ref.device_idx,
+            ref.output_idx,
+            self._camera.width,
+            self._camera.height,
+            config.save_last_frame,
+        )
         return True
+
+    @staticmethod
+    def _validate_region(region: Region, ref: MonitorRef) -> None:
+        """校验捕获区域是否落在目标显示器分辨率内。
+
+        DXCam 内部的越界报错不带显示器信息，排查困难；此处用解析出的
+        物理矩形提前拦截并给出可读提示（矩形未知时跳过，交由后端校验）。
+
+        Args:
+            region: 相对目标显示器左上角的物理像素区域。
+            ref: 解析出的后端显示器引用。
+
+        Raises:
+            RuntimeError: 区域超出目标显示器分辨率时抛出。
+        """
+        rect = ref.rect
+        if rect is None:
+            return
+        if region.left < 0 or region.top < 0 or region.right > rect.width or region.bottom > rect.height:
+            raise RuntimeError(
+                f"Capture region {region} exceeds monitor {ref.device_name or ref.output_idx} "
+                f"resolution {rect.width}x{rect.height}. Please re-select the capture region."
+            )
 
     def capture(self) -> CaptureResult:
         """执行一次屏幕截取。
@@ -99,6 +142,8 @@ class DXCamCapture(ScreenCapture):
         else:
             image = np.asarray(frame)
             self._last_frame = image
+            # 仅在拿到新帧时转储：复用缓存帧意味着屏幕无变化，重复写盘没有意义
+            self._dump_frame(image)
         if self._config is not None and self._config.region is not None:
             region = self._config.region
         else:
@@ -107,15 +152,31 @@ class DXCamCapture(ScreenCapture):
 
         return CaptureResult(image=image, timestamp=time.time(), region=region)
 
+    def _dump_frame(self, image: Any) -> None:
+        """按调试开关转储当前帧到应用本地目录。
+
+        Args:
+            image: 捕获帧（numpy 数组）。
+        """
+        if self._dumper is None or self._config is None:
+            return
+        self._dumper.dump(image, self._config.output_format)
+
     def release(self) -> None:
-        """释放 DXCam 捕获引擎占用的资源。"""
+        """释放 DXCam 捕获引擎占用的资源。
+
+        必须调用 DXCamera.release() 使 is_released=True：DXCam 按
+        (device, output, backend) 缓存实例，仅 stop() 不会清除缓存，
+        下次 create() 会返回旧实例，导致新 region 等参数不生效甚至卡死。
+        """
         if self._camera is not None:
             try:
-                self._camera.stop()
+                self._camera.release()
             except Exception:  # noqa: BLE001 - 释放阶段的异常不应向上传播
-                logger.exception("Failed to stop DXCam camera.")
+                logger.exception("Failed to release DXCam camera.")
             self._camera = None
         self._last_frame = None
+        self._dumper = None
         self._initialized = False
         logger.info("DXCam capture released.")
 

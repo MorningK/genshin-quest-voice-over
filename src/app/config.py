@@ -6,11 +6,11 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from src.app.region_selector import select_region
 from src.capture import CaptureConfig
-from src.common import Region, SelectedRegion
+from src.common import MonitorTarget, Region, SelectedRegion
 from src.recognition import DEFAULT_MAX_INFERENCE_THREADS, RecognitionConfig
 from src.tts import TTSConfig
 
@@ -28,22 +28,23 @@ class AppConfig:
         capture_backend: 屏幕捕获后端标识，可选 "dxcam" / "mss"。
         ocr_backend: OCR 后端标识，可选 "paddle" / "rapid"。
         tts_backend: TTS 后端标识，可选 "edge" / "vits"。
-        region: 捕获区域，None 表示全屏。坐标为相对 monitor_index 显示器的物理像素。
-        monitor_index: 目标显示器索引，0 为主屏。仅与 region 同时生效。
+        region: 捕获区域，None 表示整块显示器。坐标为相对 monitor 显示器的物理像素。
+        monitor: 目标显示器标识；默认（未指定）表示主显示器。
         fps: 目标帧率。
         language: OCR 识别语言。
         use_gpu: 是否使用 GPU 加速 OCR 推理。
         voice: TTS 音色。
         tts_model_path: 离线 TTS 模型路径，仅 tts_backend="vits" 时使用。
-        verbose: 是否输出 debug 级别日志。
+        verbose: 是否输出 debug 级别日志；同时开启捕获帧落盘（最新一帧覆盖写入应用本地目录）。
         frame_similarity_step: 帧缓存比对的像素降采样步长，值越大计算量越小、精度越低。
         ocr_threads: OCR CPU 推理线程数上限；负值表示不限制（用满全部物理核）。
             设为较小值（如 2）可在游戏运行时为游戏让出 CPU 核，降低卡顿。
         full_frame: 是否关闭底部对白带裁剪与对白带级帧门控，回退整帧处理旧行为。
             默认 False 以获得最低 CPU 占用；识别异常时可用此开关兜底排查。
-            注意：手动指定 region（含 --select-region）时会自动停用带裁剪与
-            带级门控——整个选区即等价于预裁剪好的对白带，再次裁剪会导致
-            选区上部的字幕变化不被感知而漏读；此开关仅在默认全屏模式下有效。
+            注意：手动指定 region（含 --select-region）时会自动停用带裁剪、
+            带级门控与 OCR 结果的带顶垂直过滤——整个选区即等价于预裁剪好的
+            对白带，再次裁切会导致选区上部的字幕被丢弃或变化不被感知而漏读；
+            此开关仅在默认全屏模式下有效。
         text_direction: 是否启用 OCR 文字方向检测（横排/竖排）。游戏字幕恒为横排，
             默认关闭以省去每帧的方向分类器推理。
     """
@@ -52,7 +53,7 @@ class AppConfig:
     ocr_backend: str = "rapid"
     tts_backend: str = "edge"
     region: Region | None = None
-    monitor_index: int = 0
+    monitor: MonitorTarget = field(default_factory=MonitorTarget)
     fps: int = DEFAULT_FPS
     language: str = DEFAULT_LANGUAGE
     use_gpu: bool = False
@@ -67,10 +68,18 @@ class AppConfig:
     def to_capture_config(self) -> CaptureConfig:
         """转换为屏幕捕获配置。
 
+        捕获区域与目标显示器标识直接透传；debug 落盘开关由 verbose 驱动，
+        开启后捕获模块会把最新一帧覆盖写入应用本地目录（仅保留最后一张）。
+
         Returns:
-            CaptureConfig 对象，包含捕获区域与目标显示器索引。
+            CaptureConfig 对象。
         """
-        return CaptureConfig(region=self.region, monitor_index=self.monitor_index, fps=self.fps)
+        return CaptureConfig(
+            region=self.region,
+            monitor=self.monitor,
+            fps=self.fps,
+            save_last_frame=self.verbose,
+        )
 
     def to_recognition_config(self) -> RecognitionConfig:
         """转换为 OCR 识别配置。
@@ -81,7 +90,8 @@ class AppConfig:
             与文字方向检测分别由 ocr_threads/full_frame/text_direction 决定。
             手动指定 region（--region / --select-region）时自动停用带裁剪：
             用户选区本身即预裁剪的对白带，叠加自动裁剪会切掉选区上部
-            导致漏读与截断。
+            导致漏读与截断；识别结果侧同样据此跳过带顶垂直过滤（见
+            RecognitionConfig.is_band_input），三处判定同源。
         """
         return RecognitionConfig(
             language=self.language,
@@ -228,20 +238,20 @@ def parse_args(argv: list[str] | None = None) -> AppConfig:
         parser.error("--region and --select-region are mutually exclusive.")
 
     region: Region | None = args.region
-    monitor_index = 0
+    monitor = MonitorTarget()
     if args.select_region:
-        # 交互式框选捕获区域；用户取消（返回 None）时回退为全屏捕获
+        # 交互式框选捕获区域；用户取消（返回 None）时回退为主屏全屏捕获
         selected = select_region()
         if isinstance(selected, SelectedRegion):
             region = selected.region
-            monitor_index = selected.monitor_index
+            monitor = selected.monitor
 
     return AppConfig(
         capture_backend=args.capture,
         ocr_backend=args.ocr,
         tts_backend=args.tts,
         region=region,
-        monitor_index=monitor_index,
+        monitor=monitor,
         fps=args.fps,
         language=args.language,
         use_gpu=args.gpu,
