@@ -41,9 +41,10 @@ class AppConfig:
             设为较小值（如 2）可在游戏运行时为游戏让出 CPU 核，降低卡顿。
         full_frame: 是否关闭底部对白带裁剪与对白带级帧门控，回退整帧处理旧行为。
             默认 False 以获得最低 CPU 占用；识别异常时可用此开关兜底排查。
-            注意：手动指定 region（含 --select-region）时会自动停用带裁剪与
-            带级门控——整个选区即等价于预裁剪好的对白带，再次裁剪会导致
-            选区上部的字幕变化不被感知而漏读；此开关仅在默认全屏模式下有效。
+            注意：手动指定 region（含 --select-region）时会自动停用带裁剪、
+            带级门控与 OCR 结果的带顶垂直过滤——整个选区即等价于预裁剪好的
+            对白带，再次裁切会导致选区上部的字幕被丢弃或变化不被感知而漏读；
+            此开关仅在默认全屏模式下有效。
         text_direction: 是否启用 OCR 文字方向检测（横排/竖排）。游戏字幕恒为横排，
             默认关闭以省去每帧的方向分类器推理。
     """
@@ -89,7 +90,8 @@ class AppConfig:
             与文字方向检测分别由 ocr_threads/full_frame/text_direction 决定。
             手动指定 region（--region / --select-region）时自动停用带裁剪：
             用户选区本身即预裁剪的对白带，叠加自动裁剪会切掉选区上部
-            导致漏读与截断。
+            导致漏读与截断；识别结果侧同样据此跳过带顶垂直过滤（见
+            RecognitionConfig.is_band_input），三处判定同源。
         """
         return RecognitionConfig(
             language=self.language,

@@ -256,6 +256,13 @@ def extract_dialogue_boxes(
     band_top = 0.0 if pre_cropped else ref_height * (1.0 - _DIALOGUE_BAND_RATIO)
 
     dialogue: list[RecognitionBox] = []
+    # 各规则的剔除计数，仅用于 debug 日志：过滤此前是静默的，
+    # 一旦启发式误伤字幕（如手动选区被按全帧比例裁掉上部）难以定位。
+    dropped_fragments = 0
+    dropped_name_tags = 0
+    dropped_option_menu = 0
+    dropped_above_band = 0
+
     for box in boxes:
         if not box.points:
             continue
@@ -268,20 +275,40 @@ def extract_dialogue_boxes(
 
         # 排除过碎的装饰性碎片
         if box_h < dialogue_min_h:
+            dropped_fragments += 1
             continue
 
         # 排除 NPC 名字标签：字号过大（通常为对白的数倍）
         if box_h > name_tag_max_h:
+            dropped_name_tags += 1
             continue
 
         # 排除右侧选项菜单：水平中心明显偏右
         if cx / ref_width >= _OPTION_MENU_X_RATIO:
+            dropped_option_menu += 1
             continue
 
         # 排除对白带之上的区域（含右上性能数据 FPS/GPU 文本）
         if bottom < band_top:
+            dropped_above_band += 1
             continue
 
         dialogue.append(box)
+
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug(
+            "Dialogue ROI: kept %d/%d boxes (band_top=%.1f, ref=%dx%d, pre_cropped=%s); "
+            "dropped above_band=%d option_menu=%d name_tag=%d fragment=%d",
+            len(dialogue),
+            len(boxes),
+            band_top,
+            ref_height,
+            ref_width,
+            pre_cropped,
+            dropped_above_band,
+            dropped_option_menu,
+            dropped_name_tags,
+            dropped_fragments,
+        )
 
     return dialogue

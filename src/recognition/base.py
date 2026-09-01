@@ -27,12 +27,16 @@ class RecognitionConfig:
         model_dir: 自定义模型目录路径，None 表示使用默认模型。
         enable_text_direction: 是否启用文字方向检测（横排/竖排）。
             游戏字幕恒为横排，默认关闭可省去每帧的方向分类器推理。
-        capture_region: 捕获区域坐标，用于推导底部对白带 ROI 以聚焦对话文本；None 表示全屏。
+        capture_region: 手动指定的捕获区域坐标；None 表示全屏。非 None 时该选区本身
+            即用户预裁剪好的对白带，与 crop_dialogue_band 等效（见 is_band_input），
+            水平方向的噪声过滤仍然生效。
         max_inference_threads: CPU 推理的线程数上限（onnxruntime intra-op/inter-op 线程池）；
             None 或负值表示不限制（用满全部物理核）。设为较小值可为游戏让出 CPU 核。
         crop_dialogue_band: 是否仅裁剪捕获图像底部对白带送入 OCR。
             字幕仅位于画面底部区域，裁剪后可显著减少推理像素量、降低 CPU 占用；
             对 bytes 输入不生效（保持原图），Web 端行为不受影响。
+            注意：手动指定 capture_region 时该开关为 False（选区无需再裁），
+            但垂直过滤同样需要停用，判定统一走 is_band_input。
     """
 
     language: str = "ch"
@@ -43,6 +47,27 @@ class RecognitionConfig:
     capture_region: Region | None = None
     max_inference_threads: int | None = DEFAULT_MAX_INFERENCE_THREADS
     crop_dialogue_band: bool = False
+
+    @property
+    def is_band_input(self) -> bool:
+        """送入 OCR 的图像是否已天然等价于"底部对白带"。
+
+        为 True 时不应再按底部比例做垂直过滤，否则会把带内的字幕误判为
+        "对白带之上的噪声"而剔除。成立条件二选一：
+
+        1. ``crop_dialogue_band`` 为真——图像已由 ``crop_dialogue_band()`` 裁剪；
+        2. ``capture_region`` 非 None——用户手动选区本身即预裁剪好的对白带，
+           与 ``AppConfig.to_recognition_config()``（据其关闭自动裁剪）和
+           ``VoiceOverApp._extract_gating_band()``（据其对整个选区做帧门控）
+           保持同一不变量。
+
+        采用只读属性而非派生字段：Web 端会在构造后覆写 ``crop_dialogue_band``，
+        属性按访问时求值才能正确反映该覆写。
+
+        Returns:
+            True 表示输入已等价于对白带，应跳过垂直带比例过滤。
+        """
+        return self.crop_dialogue_band or self.capture_region is not None
 
 
 @dataclass
