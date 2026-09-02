@@ -77,7 +77,7 @@
 ### 1.3 接口抽象
 
 ```python
-# src/capture/base.py
+# src/genshin_voice_over/capture/base.py
 
 @dataclass
 class CaptureConfig:
@@ -165,7 +165,7 @@ OCR 是核心识别环节，最关键指标是**中文识别准确率**。原神
 ### 2.3 接口抽象
 
 ```python
-# src/recognition/base.py
+# src/genshin_voice_over/recognition/base.py
 
 @dataclass
 class RecognitionConfig:
@@ -180,7 +180,7 @@ class RecognitionConfig:
 @dataclass
 class RecognitionBox:
     """单个文字区域边界框"""
-    points: list[Point]                               # 四个顶点，类型见 src/common.py 的 Point
+    points: list[Point]                               # 四个顶点，类型见 src/genshin_voice_over/common.py 的 Point
     text: str
     confidence: float
 
@@ -262,7 +262,7 @@ pyttsx3 < Edge TTS < Azure TTS < Piper < VITS < Coqui TTS < GPT-SoVITS
 ### 3.3 接口抽象
 
 ```python
-# src/tts/base.py
+# src/genshin_voice_over/tts/base.py
 
 @dataclass
 class TTSConfig:

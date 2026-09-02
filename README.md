@@ -63,6 +63,40 @@ OCR 识别默认在 CPU 上运行，可通过 `--gpu` 开关启用 GPU 推理加
 
 > 字幕区域聚焦：安装 `ocr-preprocess` 依赖组（OpenCV）后，OCR 前会做灰度/对比度增强与轻度放大，并从识别结果中聚焦画面底部对白带文本，自动剔除右侧选项菜单、右上性能数据（FPS/GPU）、手柄按键提示（如 `X 播放中`）、UID 等 UI 噪声，仅朗读玩家实际看到的对话内容；`「」`/`《》` 包裹的 NPC 名字标签也会被过滤。缺依赖组时自动降级为全屏文本，不影响既有行为。
 
+## 从 PyPI 安装（命令行版）
+
+PyPI 发行包只包含命令行程序及其引擎后端，**不含桌面 GUI**（GUI 见下方打包章节）与 Web 服务。
+
+```bash
+# 仅安装主程序
+uv tool install genshin-quest-voice-over
+# 或
+pipx install genshin-quest-voice-over
+
+# 按需一并安装可选后端
+uv tool install "genshin-quest-voice-over[capture,ocr-rapid,ocr-preprocess,tts-online,playback]"
+```
+
+安装后使用 `gqvo` 命令（等价长名 `genshin-quest-voice-over`），参数与下文 `python main.py` 完全一致：
+
+```bash
+gqvo --help
+gqvo --select-region --fps 3
+```
+
+| 场景 | 需要安装的可选组 |
+| --- | --- |
+| 屏幕捕获 | `capture`（DXCam 仅 Windows；Linux / macOS 自动降级到 MSS） |
+| OCR 识别 | `ocr-rapid`（默认后端，ONNX 模型随包分发） |
+| 字幕区域聚焦 | `ocr-preprocess` |
+| 在线语音合成 | `tts-online`（Edge TTS，需联网） |
+| 流式播放 / MP3 解码 | `playback`（缺失时降级为 winsound，MP3 会被跳过） |
+
+> 说明：
+>
+> - 由于仓库内的 Web 服务部署在 Vercel（Vercel 只安装主依赖、不装可选组），主依赖中保留了 `fastapi` 与 `python-multipart`。CLI 本身不使用它们，但安装时会一并装上。
+> - `ocr-rapid`（CPU）与 `ocr-rapid-gpu`（GPU）的互斥由 **uv 的 `[tool.uv].conflicts`** 声明。用 `uv` 安装时会强制互斥；用 `pip` 安装时不会感知该约束，请二选一手动安装。
+
 ## 运行
 
 ```bash
@@ -150,7 +184,7 @@ uv run pyinstaller gui.spec --noconfirm --distpath dist --workpath build/pyinsta
 | `ocr-rapid-gpu`（onnxruntime-gpu） | 否 | 与 CPU 版互斥 |
 | Web 依赖（fastapi / uvicorn 等） | 否 | GUI 链路零引用，已显式排除 |
 
-主题文件 `src/gui/assets/genshin_theme.json` 不是 `.py`，不会被当作模块收集，
+主题文件 `src/genshin_voice_over/gui/assets/genshin_theme.json` 不是 `.py`，不会被当作模块收集，
 已由 `gui.spec` 的 `datas` 显式声明；`gui.py` 在冻结运行时以 `sys._MEIPASS` 为基目录解析该路径。
 
 ### 发布流程
@@ -163,6 +197,43 @@ uv run pyinstaller gui.spec --noconfirm --distpath dist --workpath build/pyinsta
 - 产物命名：`genshin-quest-voice-over-<tag>-win-x64.zip`，版本号取自 Release tag，同名资产会被覆盖。
 - 也可在 Actions 页面用 **Run workflow** 手动触发（仅上传 artifact，不污染 Release）。
 - 上传资产需要 `contents: write`，工作流已声明，使用内置 `GITHUB_TOKEN`，无需额外配置密钥。
+
+## 发布到 PyPI
+
+`.github/workflows/publish-pypi.yml` 在 **发布 Release（`release: published`）时自动触发**：
+`uv build` → 校验 `pyproject.toml` 的 version 与 Release tag 一致（容忍 `v` 前缀）
+→ wheel 体检（含 `cli.py` 与各引擎子包、不含 `gui/` 与 `server.py`）→ `twine check`
+→ 用 Trusted Publishing 上传。
+
+### 发版步骤
+
+1. 手动改 `pyproject.toml` 的 `[project].version`（版本号为手动维护，不由 tag 推导）。
+2. 提交后打同名 tag 并发布 Release，例如 `v0.2.0`；工作流会校验二者一致，不一致直接失败。
+3. 工作流结束后 PyPI 上即可 `pip install genshin-quest-voice-over==0.2.0`。
+
+### 一次性配置（PyPI 侧）
+
+发布采用 **Trusted Publishing（OIDC）**，无需 API token。在 PyPI 项目的
+*Publishing → Trusted Publishers* 新增一条，字段必须与工作流完全一致：
+
+| 字段 | 值 |
+| --- | --- |
+| PyPI Project Name | `genshin-quest-voice-over` |
+| Owner | `MorningK` |
+| Repository name | `genshin-quest-voice-over` |
+| Workflow name | `publish-pypi.yml` |
+| Environment name | `pypi` |
+
+### 本地发布（兜底）
+
+```bash
+uv build
+uv publish --token <pypi-token>   # 或先 export UV_PUBLISH_TOKEN=...
+```
+
+### 手动验证
+
+在 Actions 页面用 **Run workflow** 触发 `Publish to PyPI`：只构建、体检并上传 artifact，不发布。
 
 ### 使用与排查
 

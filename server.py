@@ -1,9 +1,9 @@
 """FastAPI 服务：图片 OCR 识别 + 流式 TTS 语音合成（SSE）。
 
-复用 `src.recognition` 与 `src.tts` 的既有引擎抽象，对外提供 SSE 流式接口，
-接收上传图片与可选参数，返回识别文本与边合成边下发的 MP3 语音分片。
+复用 `genshin_voice_over.recognition` 与 `genshin_voice_over.tts` 的既有引擎抽象，
+对外提供 SSE 流式接口，接收上传图片与可选参数，返回识别文本与边合成边下发的 MP3 语音分片。
 
-处理流程（对齐 `src/app/pipeline.py`）：
+处理流程（对齐 `src/genshin_voice_over/app/pipeline.py`）：
     解码图片 → OCR recognize → 取 roi_text or text → 文本清洗 → 流式 TTS 合成 → SSE 下发
 
 运行方式：
@@ -28,14 +28,14 @@ from typing import TYPE_CHECKING, Any
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, StreamingResponse
 
-from src.app.config import AppConfig
-from src.app.textproc import clean_text, is_noise
-from src.tts.base import TextToSpeech, TTSConfig
+from genshin_voice_over.app.config import AppConfig
+from genshin_voice_over.app.textproc import clean_text, is_noise
+from genshin_voice_over.tts.base import TextToSpeech, TTSConfig
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-    from src.recognition.base import TextRecognizer
+    from genshin_voice_over.recognition.base import TextRecognizer
 
 logger = logging.getLogger(__name__)
 
@@ -128,7 +128,7 @@ def _get_engine(kind: str, backend: str, config: AppConfig, tts_config: TTSConfi
             return cached
 
         if kind == "ocr":
-            from src.recognition import PaddleOCREngine, RapidOCREngine
+            from genshin_voice_over.recognition import PaddleOCREngine, RapidOCREngine
 
             engine: TextRecognizer
             if backend == "paddle":
@@ -141,7 +141,7 @@ def _get_engine(kind: str, backend: str, config: AppConfig, tts_config: TTSConfi
                 raise RuntimeError(f"Failed to initialize OCR backend: {backend}")
             logger.info("OCR backend initialized: %s", backend)
         else:
-            from src.tts import EdgeTTSEngine, VITSEngine
+            from genshin_voice_over.tts import EdgeTTSEngine, VITSEngine
 
             engine_t: TextToSpeech
             if backend == "edge":

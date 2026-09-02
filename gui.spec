@@ -43,7 +43,7 @@ for _package in _COLLECT_PACKAGES:
 
 # 原神主题色板：非 .py 资源，PyInstaller 不会当作模块收集，必须显式声明。
 # 目标目录需与 gui.py 的 _resolve_theme_path() 解析出的相对路径一致。
-datas += [("src/gui/assets/genshin_theme.json", "src/gui/assets")]
+datas += [("src/genshin_voice_over/gui/assets/genshin_theme.json", "src/genshin_voice_over/gui/assets")]
 
 # dxcam 经 comtypes 调用 DXGI / D3D11 的 COM 接口，comtypes 的 gen 缓存于运行期按需生成，
 # 静态分析扫描不到
@@ -66,7 +66,8 @@ _EXCLUDES = [
 
 a = Analysis(  # noqa: F821 - 变量由 PyInstaller 注入构建上下文
     ["gui.py"],
-    pathex=[],
+    # src-layout：显式把 src/ 加入模块搜索路径，使打包不依赖可编辑安装机制
+    pathex=["src"],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
