@@ -15,11 +15,24 @@ logger = logging.getLogger(__name__)
 def setup_logging(verbose: bool = False) -> None:
     """配置控制台日志输出。
 
+    无控制台（PyInstaller ``--windowed`` 冻结）时 ``sys.stderr`` 为 None，
+    此时挂 StreamHandler 会让每条日志写出失败；改用 NullHandler 静默丢弃，
+    GUI 日志面板的 Handler 由主窗口挂载后照常接收日志。
+
     Args:
         verbose: 为 True 时输出 debug 级别日志，否则仅输出 info 及以上。
     """
+    level = logging.DEBUG if verbose else logging.INFO
+    if sys.stderr is None:
+        logging.basicConfig(
+            level=level,
+            handlers=[logging.NullHandler()],
+            # force 覆盖可能已存在的根 handler，确保 -v 能稳定生效
+            force=True,
+        )
+        return
     logging.basicConfig(
-        level=logging.DEBUG if verbose else logging.INFO,
+        level=level,
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
         datefmt="%H:%M:%S",
         # force 覆盖可能已存在的根 handler，确保 -v 能稳定生效

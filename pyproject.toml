@@ -68,6 +68,9 @@ gui = [
 ]
 
 [dependency-groups]
+build = [
+    "pyinstaller>=6.22.2",
+]
 dev = [
     "pre-commit>=4.6.0",
     "pyrefly>=1.2.0",

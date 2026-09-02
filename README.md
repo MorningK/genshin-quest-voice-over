@@ -115,6 +115,67 @@ uv run python main.py --reset-config
   配置文件中的非法字段会被逐项丢弃，其余字段照常生效（区域四个坐标任一非法时整体丢弃并回退全屏，
   不会用 0 填补出错误的捕获范围）。
 
+## 打包为 Windows 可执行文件
+
+GUI（`gui.py`）用 PyInstaller 打包成 **Windows x64 的 one-dir 程序**，无需安装 Python 即可双击运行。
+打包配置统一放在仓库根目录的 `gui.spec`，本地与 CI 共用同一份配置以保证可复现。
+
+### 本地构建
+
+```bash
+# 安装打包所需的全部可选依赖组 + build 组（pyinstaller）
+uv sync --extra gui --extra capture --extra ocr-rapid --extra ocr-preprocess --extra tts-online --extra playback --group build
+
+# 构建，产物在 dist/GenshinQuestVoiceOver/
+uv run pyinstaller gui.spec --noconfirm --distpath dist --workpath build/pyinstaller
+```
+
+产物结构：`dist/GenshinQuestVoiceOver/GenshinQuestVoiceOver.exe` + `_internal/`（依赖与模型）。
+分发时把整个 `GenshinQuestVoiceOver` 目录一起压缩即可，**不要单独拷走 exe**。
+
+采用 one-dir 而非单文件 exe：依赖含 onnxruntime / RapidOCR 模型 / OpenCV（约 275MB），
+单文件版每次启动都要整体解压到临时目录，启动慢且明显更容易被杀毒软件误报。
+
+### 打包范围
+
+| 依赖组 | 是否打包 | 说明 |
+| --- | --- | --- |
+| `gui`（CustomTkinter） | 是 | 含主题资源 `assets/themes/*.json` |
+| `capture`（DXCam / MSS） | 是 | DXCam 仅 Windows，经 comtypes 调用 DXGI/D3D11 |
+| `ocr-rapid`（RapidOCR + onnxruntime） | 是 | ONNX 模型随 wheel 分发，必须作为数据文件收集 |
+| `ocr-preprocess`（OpenCV headless） | 是 | 缺依赖时会自动降级为全屏文本 |
+| `tts-online`（Edge TTS） | 是 | 需联网 |
+| `playback`（miniaudio） | 是 | 缺失时降级为 winsound 一次性播放 |
+| `ocr`（PaddleOCR / PaddlePaddle） | 否 | 体积暴增数百 MB，仅作备选后端 |
+| `ocr-rapid-gpu`（onnxruntime-gpu） | 否 | 与 CPU 版互斥 |
+| Web 依赖（fastapi / uvicorn 等） | 否 | GUI 链路零引用，已显式排除 |
+
+主题文件 `src/gui/assets/genshin_theme.json` 不是 `.py`，不会被当作模块收集，
+已由 `gui.spec` 的 `datas` 显式声明；`gui.py` 在冻结运行时以 `sys._MEIPASS` 为基目录解析该路径。
+
+### 发布流程
+
+`.github/workflows/release-desktop.yml` 在 **发布 Release（`release: published`）时自动触发**：
+检出 → `setup-uv`（缓存键为 `uv.lock`）→ `uv sync --frozen`（全量可选组 + `build` 组）→ `ruff check`
+→ `pyinstaller gui.spec` → 校验主题/模型/DLL 是否随包 → 启动 exe 冒烟（20 秒内进程未退出即通过）
+→ 打 zip → 上传为 Release 资产。
+
+- 产物命名：`genshin-quest-voice-over-<tag>-win-x64.zip`，版本号取自 Release tag，同名资产会被覆盖。
+- 也可在 Actions 页面用 **Run workflow** 手动触发（仅上传 artifact，不污染 Release）。
+- 上传资产需要 `contents: write`，工作流已声明，使用内置 `GITHUB_TOKEN`，无需额外配置密钥。
+
+### 使用与排查
+
+解压后双击 `GenshinQuestVoiceOver.exe` 即可，日志显示在 GUI 的日志面板中（无控制台窗口）。
+配置与调试截图仍写入 `~/.genshin-quest-voice-over/`，与 exe 所在位置无关。
+
+| 现象 | 排查 |
+| --- | --- |
+| 启动无反应、闪退 | 检查 exe 是否与 `_internal/` 同级；确认杀软未隔离（one-dir 已比单文件更少误报，首次运行可能仍需放行） |
+| OCR 初始化失败 | 确认 `_internal/rapidocr/` 下的 `.onnx` 模型文件完整 |
+| 播放无声音 / 日志提示 `miniaudio is not installed` | 确认 `_internal/` 下 `_miniaudio.pyd` 与 `_cffi_backend*.pyd` 均在；后者由 miniaudio 的 cffi ABI 扩展运行期动态导入，缺失会静默降级为 winsound |
+| 捕获失败 | DXCam 需 Windows 10 及以上且游戏为独占全屏以外的模式，失败时会自动降级到 MSS |
+
 ## Web 服务（FastAPI + SSE）
 
 项目同时提供一个基于 FastAPI 的 Web 服务（`server.py`），通过 SSE（Server-Sent Events）接口接收前端上传的图片与可选参数，对图片执行 OCR 识别，并在同一 SSE 流中返回识别文本与流式 TTS 语音，处理流程与桌面端 `pipeline.py` 对齐。
