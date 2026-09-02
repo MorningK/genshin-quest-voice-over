@@ -198,6 +198,18 @@ uv run pyinstaller gui.spec --noconfirm --distpath dist --workpath build/pyinsta
 - 也可在 Actions 页面用 **Run workflow** 手动触发（仅上传 artifact，不污染 Release）。
 - 上传资产需要 `contents: write`，工作流已声明，使用内置 `GITHUB_TOKEN`，无需额外配置密钥。
 
+### 使用与排查
+
+解压后双击 `GenshinQuestVoiceOver.exe` 即可，日志显示在 GUI 的日志面板中（无控制台窗口）。
+配置与调试截图仍写入 `~/.genshin-quest-voice-over/`，与 exe 所在位置无关。
+
+| 现象 | 排查 |
+| --- | --- |
+| 启动无反应、闪退 | 检查 exe 是否与 `_internal/` 同级；确认杀软未隔离（one-dir 已比单文件更少误报，首次运行可能仍需放行） |
+| OCR 初始化失败 | 确认 `_internal/rapidocr/` 下的 `.onnx` 模型文件完整 |
+| 播放无声音 / 日志提示 `miniaudio is not installed` | 确认 `_internal/` 下 `_miniaudio.pyd` 与 `_cffi_backend*.pyd` 均在；后者由 miniaudio 的 cffi ABI 扩展运行期动态导入，缺失会静默降级为 winsound |
+| 捕获失败 | DXCam 需 Windows 10 及以上且游戏为独占全屏以外的模式，失败时会自动降级到 MSS |
+
 ## 发布到 PyPI
 
 `.github/workflows/publish-pypi.yml` 在 **发布 Release（`release: published`）时自动触发**：
@@ -234,18 +246,6 @@ uv publish --token <pypi-token>   # 或先 export UV_PUBLISH_TOKEN=...
 ### 手动验证
 
 在 Actions 页面用 **Run workflow** 触发 `Publish to PyPI`：只构建、体检并上传 artifact，不发布。
-
-### 使用与排查
-
-解压后双击 `GenshinQuestVoiceOver.exe` 即可，日志显示在 GUI 的日志面板中（无控制台窗口）。
-配置与调试截图仍写入 `~/.genshin-quest-voice-over/`，与 exe 所在位置无关。
-
-| 现象 | 排查 |
-| --- | --- |
-| 启动无反应、闪退 | 检查 exe 是否与 `_internal/` 同级；确认杀软未隔离（one-dir 已比单文件更少误报，首次运行可能仍需放行） |
-| OCR 初始化失败 | 确认 `_internal/rapidocr/` 下的 `.onnx` 模型文件完整 |
-| 播放无声音 / 日志提示 `miniaudio is not installed` | 确认 `_internal/` 下 `_miniaudio.pyd` 与 `_cffi_backend*.pyd` 均在；后者由 miniaudio 的 cffi ABI 扩展运行期动态导入，缺失会静默降级为 winsound |
-| 捕获失败 | DXCam 需 Windows 10 及以上且游戏为独占全屏以外的模式，失败时会自动降级到 MSS |
 
 ## Web 服务（FastAPI + SSE）
 
@@ -319,17 +319,22 @@ vercel deploy    # 部署到生产
 ## 代码结构
 
 ```
-main.py                      # 应用入口：CLI 参数解析 + VoiceOverApp 驱动
-src/
-├── common.py                # 共享数据类型（Point/Region/SelectedRegion）
-├── app/                     # 应用编排
-│   ├── config.py            # 运行配置与 CLI 解析
-│   ├── pipeline.py          # VoiceOverApp 主流程
-│   ├── region_selector.py   # 交互式屏幕区域框选（tkinter，支持多显示器）
-│   ├── monitor.py           # 显示器枚举与多屏坐标转换
-│   ├── textproc.py          # 文本清洗/去重/变化检测
-│   └── player.py            # 音频播放（winsound）
-├── capture/                 # 屏幕捕获（DXCam/MSS）
-├── recognition/             # OCR 识别（PaddleOCR/RapidOCR）
-└── tts/                     # TTS 合成（Edge TTS/VITS）
+main.py                              # 仓库内 CLI 启动薄壳，转发到 genshin_voice_over.cli:main
+gui.py                               # 桌面 GUI 入口（CustomTkinter）
+server.py                            # Web 服务入口（FastAPI + SSE）
+gui.spec                             # PyInstaller 打包配置（GUI → Windows exe）
+src/genshin_voice_over/              # 可导入顶层包（src-layout）
+├── cli.py                           # CLI 入口实现，console script `gqvo` 指向此处
+├── common.py                        # 共享数据类型（Point/Region/SelectedRegion）
+├── app/                             # 应用编排
+│   ├── config.py                    # 运行配置与 CLI 解析
+│   ├── pipeline.py                  # VoiceOverApp 主流程
+│   ├── region_selector.py           # 交互式屏幕区域框选（tkinter，支持多显示器）
+│   ├── monitor.py                   # 显示器枚举与多屏坐标转换
+│   ├── textproc.py                  # 文本清洗/去重/变化检测
+│   └── player.py                    # 音频播放（winsound / miniaudio）
+├── capture/                         # 屏幕捕获（DXCam/MSS）
+├── recognition/                     # OCR 识别（PaddleOCR/RapidOCR）
+├── tts/                             # TTS 合成（Edge TTS/VITS）
+└── gui/                             # 桌面 GUI（仅随 exe 分发，不进 PyPI 包）
 ```
