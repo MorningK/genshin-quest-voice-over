@@ -84,6 +84,26 @@ def _read_int(data: dict[str, Any], key: str, default: int) -> int:
     return value
 
 
+def _read_strict_int(data: dict[str, Any], key: str) -> int | None:
+    """从配置字典读取整数字段，不做任何默认值兜底。
+
+    与 :func:`_read_int` 的区别是非法时返回 None 而非默认值，供调用方据此
+    整体丢弃所在的复合结构（如区域），避免用 0 填补出语义错误的取值。
+
+    Args:
+        data: 配置字典。
+        key: 字段名。
+
+    Returns:
+        字段值；字段缺失、为布尔值或非整数时返回 None。
+    """
+    value = data.get(key)
+    # bool 是 int 的子类，此处显式排除，避免 true 被当作 1
+    if not isinstance(value, int) or isinstance(value, bool):
+        return None
+    return value
+
+
 def _read_bool(data: dict[str, Any], key: str, default: bool) -> bool:
     """从配置字典读取布尔字段。
 
@@ -106,8 +126,10 @@ def _read_bool(data: dict[str, Any], key: str, default: bool) -> bool:
 def _read_region(value: Any) -> Region | None:
     """从配置字典的嵌套值还原矩形区域。
 
-    坐标非整数或区域非法（右<左、下<上）时整体丢弃并返回 None，
-    以免把失效的旧坐标下发给捕获后端。
+    四个坐标必须全部为合法整数（缺失、布尔值或非整数均视为非法），任一非法
+    即整体丢弃并返回 None，绝不用 0 填补——补 0 会静默把捕获区域挪到屏幕边角，
+    用户完全无感知；整体丢弃后回退全屏，用户能立刻察觉并重选。
+    区域自身非法（右<左、下<上）同样整体丢弃。
 
     Args:
         value: 区域字典或 None。
@@ -120,13 +142,16 @@ def _read_region(value: Any) -> Region | None:
     if not isinstance(value, dict):
         logger.debug("Config field 'region' is not an object (%r), ignored.", value)
         return None
+    coordinates: list[int] = []
+    for name in ("left", "top", "right", "bottom"):
+        coordinate = _read_strict_int(value, name)
+        if coordinate is None:
+            logger.debug("Config field 'region' has invalid coordinate '%s' (%r), ignored.", name, value)
+            return None
+        coordinates.append(coordinate)
+    left, top, right, bottom = coordinates
     try:
-        return Region(
-            left=_read_int(value, "left", 0),
-            top=_read_int(value, "top", 0),
-            right=_read_int(value, "right", 0),
-            bottom=_read_int(value, "bottom", 0),
-        )
+        return Region(left=left, top=top, right=right, bottom=bottom)
     except ValueError as exc:
         logger.debug("Config field 'region' invalid (%s), ignored.", exc)
         return None
@@ -413,14 +438,30 @@ def build_parser() -> argparse.ArgumentParser:
         "--verbose",
         default=None,
         action="store_true",
-        help="输出 debug 级别日志（含各步骤耗时明细，默认关闭）",
+        dest="verbose",
+        help="输出 debug 级别日志（含各步骤耗时明细，默认关闭；已保存的开启状态可用 --no-verbose 关闭）",
+    )
+    parser.add_argument(
+        "--no-verbose",
+        default=None,
+        action="store_false",
+        dest="verbose",
+        help="关闭 debug 级别日志（用于覆盖配置文件中已保存的 verbose=true）",
     )
     parser.add_argument("--language", default=None, help=f"OCR 识别语言（默认 {DEFAULT_LANGUAGE}）")
     parser.add_argument(
         "--gpu",
         default=None,
         action="store_true",
-        help="使用 GPU 加速 OCR 推理（需安装对应 GPU 依赖组，默认关闭）",
+        dest="gpu",
+        help="使用 GPU 加速 OCR 推理（需安装对应 GPU 依赖组，默认关闭；已保存的开启状态可用 --no-gpu 关闭）",
+    )
+    parser.add_argument(
+        "--no-gpu",
+        default=None,
+        action="store_false",
+        dest="gpu",
+        help="不使用 GPU 加速（用于覆盖配置文件中已保存的 use_gpu=true）",
     )
     parser.add_argument("--voice", default=None, help=f"TTS 音色（默认 {DEFAULT_VOICE}）")
     parser.add_argument(
@@ -447,16 +488,35 @@ def build_parser() -> argparse.ArgumentParser:
         "--full-frame",
         default=None,
         action="store_true",
+        dest="full_frame",
         help=(
-            "关闭底部对白带裁剪与对白带级帧门控，回退整帧处理旧行为（排查识别问题用，默认关闭）；"
-            "手动指定 region 时本就自动停用，此开关冗余但无害"
+            "关闭底部对白带裁剪与对白带级帧门控，回退整帧处理旧行为（排查识别问题用，默认关闭；"
+            "已保存的开启状态可用 --no-full-frame 关闭）；手动指定 region 时本就自动停用，此开关冗余但无害"
         ),
+    )
+    parser.add_argument(
+        "--no-full-frame",
+        default=None,
+        action="store_false",
+        dest="full_frame",
+        help="恢复底部对白带裁剪与带级帧门控（用于覆盖配置文件中已保存的 full_frame=true）",
     )
     parser.add_argument(
         "--text-direction",
         default=None,
         action="store_true",
-        help="启用 OCR 文字方向检测（横排/竖排，默认关闭）；游戏字幕恒为横排，开启会增加 CPU 开销",
+        dest="text_direction",
+        help=(
+            "启用 OCR 文字方向检测（横排/竖排，默认关闭；已保存的开启状态可用 --no-text-direction 关闭）；"
+            "游戏字幕恒为横排，开启会增加 CPU 开销"
+        ),
+    )
+    parser.add_argument(
+        "--no-text-direction",
+        default=None,
+        action="store_false",
+        dest="text_direction",
+        help="关闭 OCR 文字方向检测（用于覆盖配置文件中已保存的 text_direction=true）",
     )
     parser.add_argument(
         "--reset-config",

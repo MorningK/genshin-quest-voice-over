@@ -29,8 +29,11 @@ CONFIG_FILE_NAME = "config.json"
 # 配置结构版本号：结构不兼容变更时递增，读取到更高版本的文件会整体忽略
 CONFIG_VERSION = 1
 
-# 写盘时的临时文件后缀（与正式文件同目录，确保 os.replace 落在同一文件系统）
-_TEMP_SUFFIX = ".tmp"
+# 写盘时的临时文件命名模板：形如 config.json.<pid>.tmp。
+# 带上进程 PID 是为了让每个进程只操作自己的临时文件——CLI 与 GUI 可能同时
+# 运行并同时保存，共用一个固定临时名会互相覆盖或删除对方的临时文件。
+# 临时文件必须与正式文件同目录，确保 os.replace 落在同一文件系统内保持原子性。
+_TEMP_NAME_TEMPLATE = "{name}.{pid}.tmp"
 
 
 def get_config_path() -> Path:
@@ -85,6 +88,7 @@ def save_config_file(data: dict[str, Any]) -> bool:
     """将配置字典写入配置文件。
 
     先写入同目录临时文件再原子替换，避免写盘被打断后留下半截 JSON；
+    临时文件名带进程 PID，并发保存时各进程互不干扰；
     目录不存在时自动创建。写入失败仅记录告警，不影响调用方流程。
 
     Args:
@@ -94,7 +98,7 @@ def save_config_file(data: dict[str, Any]) -> bool:
         True 表示写入成功；False 表示写入失败（详见 warning 日志）。
     """
     path = get_config_path()
-    temp_path = path.with_name(path.name + _TEMP_SUFFIX)
+    temp_path = path.with_name(_TEMP_NAME_TEMPLATE.format(name=path.name, pid=os.getpid()))
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = json.dumps(data, ensure_ascii=False, indent=2)
