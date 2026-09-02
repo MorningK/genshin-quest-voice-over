@@ -76,7 +76,7 @@ CI 有两个工作流：发布 Release 时分别构建 Windows exe（`.github/wo
 单帧流程 `_process_frame()`：
 1. 捕获一帧；与上一帧降采样副本逐像素比对，完全一致则跳过整帧（避免无效 OCR）——比对失败（OCR 异常）时不更新缓存以便重试。
 2. OCR 得到 `RecognitionResult`；优先取 `roi_text`（对白带聚焦文本，已剔除右侧选项菜单/FPS/GPU/UID 等 UI 噪声），为空回退全帧 `text`。
-3. `TextTracker.should_play()`（`src/genshin_voice_over/app/textproc.py`）判定是否播放：清洗 → UI 噪声过滤 → 变化检测。命中规则返回 `PlayRequest(text, kind)`——同句文字陆续追加时返回 `kind="delta"` 仅补播增量后缀；OCR 帧间抖动（相似度 ≥ 0.9）视为同句不重播。修改字幕去重逻辑时务必兼顾首帧空串前缀、标点抖动等已在代码中注释过的边界情况，并守住两条不变式：去标点比对必须**同时覆盖 ASCII 与中日标点**（否则 `OK!` ↔ `OK` 相似度仅 0.8，低于 0.9 阈值会整句重播）；判定为「帧间抖动」的分支必须**同步更新 `_last_text`**（否则抖动发生在句子中段时，下一帧追加文字会因前缀判断失败而把已朗读部分整句重播）。
+3. `TextTracker.should_play()`（`src/genshin_voice_over/app/textproc.py`）判定是否播放：清洗 → UI 噪声过滤 → 变化检测。命中规则返回 `PlayRequest(text, kind)`——同句文字陆续追加时返回 `kind="delta"` 仅补播增量后缀；OCR 帧间抖动（相似度 ≥ 0.9）视为同句不重播。修改字幕去重逻辑时务必兼顾首帧空串前缀、标点抖动等已在代码中注释过的边界情况，并守住两条不变式：去标点比对必须**完整覆盖 ASCII 与中日标点**（ASCII 部分直接由 `string.punctuation` 生成：手写枚举必然漏字符，此前就漏掉 21 个，使 `OK@` ↔ `OK` 之类仍被判为不同句）；判定为「帧间抖动」的分支必须**同步更新 `_last_text`**（否则抖动发生在句子中段时，下一帧追加文字会因前缀判断失败而把已朗读部分整句重播）。
 4. 流式合成+播放或降级一次性合成+播放；每步均有 debug 计时日志。
 
 ### 共享类型与预处理
