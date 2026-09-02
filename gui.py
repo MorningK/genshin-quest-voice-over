@@ -20,32 +20,58 @@ except ImportError as exc:  # pragma: no cover - 依赖缺失时的启动指引
     print("缺少 CustomTkinter 依赖，请先执行：uv sync --extra gui")
     raise SystemExit(1) from exc
 
+import tkinter as tk
+
 from genshin_voice_over.app.bootstrap import ensure_dpi_awareness, lower_process_priority, setup_logging
 from genshin_voice_over.gui.window import MainWindow
 
 logger = logging.getLogger(__name__)
 
-# 原神主题文件相对基准目录的路径：源码运行与冻结运行共用同一相对布局，
-# 冻结时该文件由 gui.spec 的 datas 收集到解包目录下的相同相对位置。
+# 资源文件相对基准目录的路径：源码运行与冻结运行共用同一相对布局，
+# 冻结时这些文件由 gui.spec 的 datas 收集到解包目录下的相同相对位置。
 _THEME_RELATIVE_PATH = Path("src") / "genshin_voice_over" / "gui" / "assets" / "genshin_theme.json"
+# 应用图标（由 assets/logo/logo.svg 派生的多尺寸 ico）
+_ICON_RELATIVE_PATH = Path("assets") / "logo" / "logo.ico"
 
 
-def _resolve_theme_path() -> Path:
-    """解析原神主题文件的绝对路径，兼容 PyInstaller 冻结运行。
+def _resolve_asset_path(relative_path: Path) -> Path:
+    """解析资源文件的绝对路径，兼容 PyInstaller 冻结运行。
 
     未冻结时以本入口文件所在目录为基准；冻结（``sys.frozen``）时以
-    PyInstaller 的解包目录 ``sys._MEIPASS`` 为基准。两种方式的基准目录
-    下都存在 ``src/genshin_voice_over/gui/assets/genshin_theme.json``，故解析结果一致。
+    PyInstaller 的解包目录 ``sys._MEIPASS`` 为基准。两种方式的基准目录下
+    资源文件的相对布局一致（由 gui.spec 的 datas 收集保证），故解析结果一致。
+
+    Args:
+        relative_path: 资源文件相对基准目录的路径。
 
     Returns:
-        主题文件（genshin_theme.json）的绝对路径。
+        资源文件的绝对路径。
     """
     base = Path(str(getattr(sys, "_MEIPASS", ""))) if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
-    return base / _THEME_RELATIVE_PATH
+    return base / relative_path
 
 
 # 主题文件路径：基于入口文件/解包目录计算，不依赖当前工作目录
-_THEME_PATH = _resolve_theme_path()
+_THEME_PATH = _resolve_asset_path(_THEME_RELATIVE_PATH)
+
+
+def _apply_window_icon(root: ctk.CTk) -> None:
+    """把自定义应用图标设置到主窗口，同时作用于标题栏与任务栏。
+
+    图标文件缺失或损坏时只记录告警日志并继续启动：图标属于外观装饰，
+    不应像主题文件那样阻断主流程。
+
+    Args:
+        root: 已创建的根窗口。
+    """
+    icon_path = _resolve_asset_path(_ICON_RELATIVE_PATH)
+    try:
+        # Windows 端 Tk 只接受 .ico；多尺寸 ico 由系统按显示场景自动挑选帧
+        root.iconbitmap(str(icon_path))
+    except tk.TclError as exc:
+        logger.warning("Failed to apply window icon %s: %s", icon_path, exc)
+        return
+    logger.debug("Window icon applied: %s", icon_path)
 
 
 def main() -> int:
@@ -68,6 +94,7 @@ def main() -> int:
     logger.info("Starting GUI application (theme=%s).", _THEME_PATH.name)
 
     root = ctk.CTk()
+    _apply_window_icon(root)
     MainWindow(root)
     root.mainloop()
     logger.info("GUI application exited.")
