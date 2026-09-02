@@ -200,7 +200,8 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(
     title="Genshin Quest Voice Over API",
     description="图片 OCR 识别 + 流式 TTS 语音合成服务",
-    version="0.1.0",
+    # 与 pyproject.toml 的 [project].version 保持一致
+    version="0.1.1",
     lifespan=_lifespan,
 )
 
