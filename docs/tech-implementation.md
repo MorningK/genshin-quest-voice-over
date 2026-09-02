@@ -356,8 +356,8 @@ class TextToSpeech(ABC):
 ### 4.3 源代码目录结构
 
 ```
-src/
-├── __init__.py              # 顶层包
+src/genshin_voice_over/
+├── __init__.py              # 顶层包（src-layout，导入写作 genshin_voice_over.*）
 ├── capture/
 │   ├── __init__.py          # 导出 ScreenCapture、CaptureConfig、CaptureResult
 │   └── base.py              # 抽象接口定义

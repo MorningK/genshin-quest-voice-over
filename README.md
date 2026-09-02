@@ -157,7 +157,8 @@ GUI（`gui.py`）用 PyInstaller 打包成 **Windows x64 的 one-dir 程序**，
 ### 本地构建
 
 ```bash
-# 安装打包所需的全部可选依赖组 + build 组（pyinstaller）
+# 安装打包所需的可选依赖组 + build 组（pyinstaller）
+# 未包含 ocr（PaddleOCR，体积过大）、ocr-rapid-gpu（与 CPU 版互斥）与 web（仅 Web 服务用）
 uv sync --extra gui --extra capture --extra ocr-rapid --extra ocr-preprocess --extra tts-online --extra playback --group build
 
 # 构建，产物在 dist/GenshinQuestVoiceOver/
@@ -190,7 +191,7 @@ uv run pyinstaller gui.spec --noconfirm --distpath dist --workpath build/pyinsta
 ### 发布流程
 
 `.github/workflows/release-desktop.yml` 在 **发布 Release（`release: published`）时自动触发**：
-检出 → `setup-uv`（缓存键为 `uv.lock`）→ `uv sync --frozen`（全量可选组 + `build` 组）→ `ruff check`
+检出 → `setup-uv`（缓存键为 `uv.lock`）→ `uv sync --frozen`（打包所需的可选组 + `build` 组）→ `ruff check`
 → `pyinstaller gui.spec` → 校验主题/模型/DLL 是否随包 → 启动 exe 冒烟（20 秒内进程未退出即通过）
 → 打 zip → 上传为 Release 资产。
 
@@ -318,7 +319,7 @@ vercel deploy    # 部署到生产
 
 ## 代码结构
 
-```
+```text
 main.py                              # 仓库内 CLI 启动薄壳，转发到 genshin_voice_over.cli:main
 gui.py                               # 桌面 GUI 入口（CustomTkinter）
 server.py                            # Web 服务入口（FastAPI + SSE）

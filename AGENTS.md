@@ -96,7 +96,7 @@ CI 有两个工作流：发布 Release 时分别构建 Windows exe（`.github/wo
 
 - 项目采用 **src-layout**：可导入顶层包是 `genshin_voice_over`，位于 `src/genshin_voice_over/`；导入一律写作 `from genshin_voice_over.xxx import ...`，不再有顶层 `src` 包。
 - `uv sync` 会以可编辑方式安装本项目，`genshin_voice_over` 直接可见；`pyrefly` 的 `search-path` 为 `src`、`ruff` 的 `src` 为 `["src", "."]`，改动包结构时需同步。
-- PyPI 发行包（构建后端 hatchling）只含 CLI：`[tool.hatch.build.targets.wheel]` 显式 `exclude` 了 `gui` 子包，根 `server.py` 也不在包内。GUI 仅随 PyInstaller 打包的 exe 分发。
+- PyPI 发行包（构建后端 hatchling）只含 CLI：`[tool.hatch.build.targets.wheel]` 与 `[tool.hatch.build.targets.sdist]` 都显式 `exclude` 了 `gui` 子包，根 `server.py` 也不在包内。GUI 仅随 PyInstaller 打包的 exe 分发。
 - 主依赖里的 `fastapi` / `python-multipart` 虽只被 Web 端使用，却是 Vercel 的硬需求，**不得移入 `web` 可选组**。
 
 ## Vercel 部署要点（修改 server.py / 依赖时须注意）

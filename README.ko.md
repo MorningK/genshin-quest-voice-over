@@ -241,7 +241,7 @@ Actions 페이지에서 **Run workflow**로 `Publish to PyPI`를 트리거하면
 
 ## 웹 서비스(FastAPI + SSE)
 
-이 프로젝트는 FastAPI 기반 웹 서비스(`server.py`)도 제공합니다. SSE(Server-Sent Events)로 프런트엔드가 업로드한 이미지와 선택적 파라미터를 받아 이미지에 OCR을 수행하고, 동일한 SSE 스트림에서 인식 텍스트와 스트리밍 TTS 음성을 반환합니다. 처리 흐름은 데스크톱의 `pipeline.py`와 동일하게 맞췄습니다.
+이 프로젝트는 FastAPI 기반 웹 서비스(`server.py`)도 제공합니다. 프런트엔드가 업로드한 이미지와 선택적 파라미터는 **multipart POST 요청**으로 받고, 이미지에 OCR을 수행한 뒤 인식 텍스트와 스트리밍 TTS 음성을 **SSE(Server-Sent Events) 응답**으로 동일한 스트림에서 반환합니다. 처리 흐름은 데스크톱의 `pipeline.py`와 동일하게 맞췄습니다.
 
 ### 인터페이스
 
@@ -313,7 +313,7 @@ vercel deploy    # 프로덕션 배포
 
 ## 코드 구조
 
-```
+```text
 main.py                              # 저장소 내 CLI 실행 셸. genshin_voice_over.cli:main으로 전달
 gui.py                               # 데스크톱 GUI 진입점(CustomTkinter)
 server.py                            # 웹 서비스 진입점(FastAPI + SSE)

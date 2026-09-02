@@ -25,6 +25,9 @@ jobs:
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
+        with:
+          # 后续步骤会执行仓库内的依赖安装与构建脚本，不持久化写权限 token
+          persist-credentials: false
 
       - name: 安装 uv
         uses: astral-sh/setup-uv@v5
@@ -131,11 +134,13 @@ jobs:
 
       - name: 上传 Release 资产
         if: github.event_name == 'release'
-        uses: softprops/action-gh-release@v2
+        # v2 使用已弃用的 Node20 运行时，统一升至 v3
+        uses: softprops/action-gh-release@v3
         with:
           files: ${{ env.ASSET_NAME }}
           # 允许重跑同一 Release 的构建时覆盖同名资产
-          overwrite: true
+          # 注意：该输入名为 overwrite_files（v2.3.3 起），不是 overwrite
+          overwrite_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

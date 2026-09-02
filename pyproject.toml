@@ -61,6 +61,8 @@ exclude = ["src/genshin_voice_over/gui"]
 
 [tool.hatch.build.targets.sdist]
 include = ["src/genshin_voice_over", "README.md", "LICENSE", "main.py", "pyproject.toml"]
+# 与 wheel 保持一致：GUI 仅随 PyInstaller 打包的 exe 分发，也不进 sdist
+exclude = ["src/genshin_voice_over/gui"]
 
 [project.optional-dependencies]
 # 屏幕捕获后端

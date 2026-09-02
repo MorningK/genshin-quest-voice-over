@@ -23,6 +23,9 @@ jobs:
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
+        with:
+          # 发布链路会执行仓库内的构建脚本，不持久化写权限 token
+          persist-credentials: false
 
       - name: 安装 uv
         uses: astral-sh/setup-uv@v5
@@ -30,6 +33,8 @@ jobs:
           # 缓存键默认跟随 uv.lock，依赖未变时跳过下载
           enable-cache: true
           cache-dependency-glob: uv.lock
+          # 按触发 ref 隔离缓存，避免其他 ref 写入的缓存影响待发布产物
+          cache-suffix: ${{ github.ref_name }}
 
       - name: 构建 sdist 与 wheel
         run: uv build
@@ -117,4 +122,6 @@ jobs:
           path: dist/
 
       - name: 上传到 PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+        # 固定到不可变 commit SHA：本 job 持有 id-token: write，可铸造 PyPI 上传凭据，
+        # 不应让上游分支引用的变动改变发布步骤（对应 release/v1 分支头，2026-07-28）
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # release/v1

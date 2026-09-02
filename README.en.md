@@ -241,7 +241,7 @@ Trigger `Publish to PyPI` with **Run workflow** on the Actions page: it only bui
 
 ## Web Service (FastAPI + SSE)
 
-The project also ships a FastAPI web service (`server.py`). It accepts an uploaded image plus optional parameters over SSE (Server-Sent Events), runs OCR on the image, and returns the recognized text together with streaming TTS audio in the same SSE stream; the processing flow is aligned with the desktop `pipeline.py`.
+The project also ships a FastAPI web service (`server.py`). It receives the uploaded image and optional parameters as a **multipart POST request**, runs OCR on the image, and returns the recognized text together with streaming TTS audio over an **SSE (Server-Sent Events) response**; the processing flow is aligned with the desktop `pipeline.py`.
 
 ### Endpoints
 
@@ -313,7 +313,7 @@ If uploading an image after deployment returns `event: error` containing `Failed
 
 ## Code Structure
 
-```
+```text
 main.py                              # In-repo CLI launcher; forwards to genshin_voice_over.cli:main
 gui.py                               # Desktop GUI entry point (CustomTkinter)
 server.py                            # Web service entry point (FastAPI + SSE)
