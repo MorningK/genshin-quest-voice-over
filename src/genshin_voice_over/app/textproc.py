@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import re
+import string
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 
@@ -21,9 +22,14 @@ _SIMILARITY_THRESHOLD = 0.9
 
 # 句末标点集合：字幕逐字追加时常因帧间抖动在末尾多出/丢失这些标点，
 # 去标点后再比对可避免把同一句误判为新句而整句重播。
-# 字符类以 ] 开头将其视为字面量，类内 [ ( ) 等均为字面量，无需转义。
-_TRAILING_PUNCT_RE = re.compile(r"[]。！？…，、；：" "''（）()【】~… \u3000]+$")
-_LEADING_PUNCT_RE = re.compile(r"^[]。！？…，、；：" "''（）()【】~… \u3000]+")
+# ASCII 标点统一由 string.punctuation 生成：手写枚举必然漏字符，此前就漏掉了
+# " # $ % & * + - / < = > @ [ \ ] ^ _ ` { | } 共 21 个，于是 "OK@" ↔ "OK" 之类
+# 仍被判为不同句而重播；re.escape 保证 ] ^ - \ 等在字符类内也被正确转义。
+# 全角标点、书名号、全角空格与普通空格在 ASCII 集合中无对应，需单独列出。
+_ASCII_PUNCT_CLASS = re.escape(string.punctuation)
+_EXTRA_PUNCT_CLASS = "。！？…，、；：（）【】\u3000 "
+_TRAILING_PUNCT_RE = re.compile(rf"[{_ASCII_PUNCT_CLASS}{_EXTRA_PUNCT_CLASS}]+$")
+_LEADING_PUNCT_RE = re.compile(rf"^[{_ASCII_PUNCT_CLASS}{_EXTRA_PUNCT_CLASS}]+")
 
 # 游戏专属 UI 噪声规则：手柄按键提示、性能数据、UID、纯符号选项前缀等。
 # 每条规则命中即整行丢弃（这些文本不应被朗读）。
@@ -174,6 +180,10 @@ class TextTracker:
             and cleaned_stripped
             and SequenceMatcher(None, last_stripped, cleaned_stripped).ratio() >= _SIMILARITY_THRESHOLD
         ):
+            # 必须同步累积文本：抖动若发生在句子中段，沿用旧值会让下一帧追加文字时
+            # 前缀判断失败，从而把已朗读过的部分连同新文字一起整句重播。
+            # 存 cleaned（而非去标点后的值），与上面两个分支的口径保持一致。
+            self._last_text = cleaned
             return None
 
         self._last_text = cleaned

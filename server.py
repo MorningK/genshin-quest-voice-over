@@ -18,6 +18,7 @@ import base64
 import json
 import logging
 import queue
+import sys
 import threading
 import traceback
 from contextlib import asynccontextmanager
@@ -26,16 +27,22 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 
-from genshin_voice_over.app.config import AppConfig
-from genshin_voice_over.app.textproc import clean_text, is_noise
-from genshin_voice_over.tts.base import TextToSpeech, TTSConfig
+# Vercel 只安装 [project].dependencies，不会安装项目自身，因此 src-layout 下的包
+# （src/genshin_voice_over）不在模块搜索路径中，运行时会 ModuleNotFoundError。
+# 这里显式把 src/ 加入 sys.path，让 serverless 与本地（uv sync 可编辑安装）行为一致；
+# 本地该路径已由可编辑安装提供，重复插入无副作用。必须在导入 genshin_voice_over 之前执行。
+sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
+
+from genshin_voice_over.app.config import AppConfig  # noqa: E402
+from genshin_voice_over.app.textproc import clean_text, is_noise  # noqa: E402
+from genshin_voice_over.tts.base import TextToSpeech, TTSConfig  # noqa: E402
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-    from genshin_voice_over.recognition.base import TextRecognizer
+    from genshin_voice_over.recognition.base import TextRecognizer  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +69,13 @@ _QUEUE_TIMEOUT = 0.5
 
 # 前端页面路径
 _FRONTEND_PATH = Path(__file__).parent / "static" / "index.html"
+
+# 站点图标路径（浏览器会隐式请求 /favicon.ico）
+_FAVICON_PATH = Path(__file__).parent / "static" / "favicon.ico"
+
+# 站点矢量图标路径，供前端 <link rel="icon" type="image/svg+xml"> 使用；
+# 与 favicon.ico 并存，现代浏览器优先采用 SVG，老旧浏览器仍回落到 ico
+_LOGO_PATH = Path(__file__).parent / "static" / "logo.svg"
 
 
 @dataclass
@@ -190,7 +204,8 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(
     title="Genshin Quest Voice Over API",
     description="图片 OCR 识别 + 流式 TTS 语音合成服务",
-    version="0.1.0",
+    # 与 pyproject.toml 的 [project].version 保持一致
+    version="0.1.1",
     lifespan=_lifespan,
 )
 
@@ -240,6 +255,37 @@ async def index() -> HTMLResponse:
             "<p>Frontend not found. POST /api/voice with an image to synthesize.</p></body></html>"
         )
     return HTMLResponse(content)
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon() -> Response:
+    """返回站点图标。
+
+    浏览器会隐式请求 `/favicon.ico`；未命中会在访问日志里留下 404 噪音。
+    图标文件缺失时返回 204，避免这条旁路请求干扰问题排查。
+
+    Returns:
+        图标文件的响应；文件不存在时返回 204 No Content。
+    """
+    if not _FAVICON_PATH.exists():
+        return Response(status_code=204)
+    # 显式声明 MIME，避免部分浏览器按 octet-stream 处理而放弃渲染
+    return FileResponse(_FAVICON_PATH, media_type="image/vnd.microsoft.icon")
+
+
+@app.get("/logo.svg", include_in_schema=False)
+def logo() -> Response:
+    """返回站点矢量图标。
+
+    `static/` 未整体挂载为静态目录，页面里的 `/logo.svg` 需由本路由提供；
+    图标文件缺失时返回 204，与 favicon 行为保持一致。
+
+    Returns:
+        矢量图标响应；文件不存在时返回 204 No Content。
+    """
+    if not _LOGO_PATH.exists():
+        return Response(status_code=204)
+    return FileResponse(_LOGO_PATH, media_type="image/svg+xml")
 
 
 @app.post("/api/voice", tags=["voice"])
