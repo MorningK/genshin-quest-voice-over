@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-labelledby="l03t l03d">
+  <title id="l03t">GQVO · 四角星字幕声波</title>
+  <desc id="l03d">原神标志性四角星立于星轨圆环中央，星心的字幕横线由内向外渐变为声波曲线，表达「文字 → 语音」。</desc>
+
+  <defs>
+    <linearGradient id="l03bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1C2C58"/>
+      <stop offset="1" stop-color="#0D1631"/>
+    </linearGradient>
+    <linearGradient id="l03gold" x1="0" y1="0" x2="0.35" y2="1">
+      <stop offset="0" stop-color="#F9EBC4"/>
+      <stop offset="0.4" stop-color="#D3A94E"/>
+      <stop offset="1" stop-color="#8E6A28"/>
+    </linearGradient>
+    <linearGradient id="l03disc" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#22325F"/>
+      <stop offset="1" stop-color="#0F1A3A"/>
+    </linearGradient>
+    <radialGradient id="l03halo" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#D3A94E" stop-opacity="0.45"/>
+      <stop offset="0.6" stop-color="#D3A94E" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#D3A94E" stop-opacity="0"/>
+    </radialGradient>
+    <path id="l03spark" d="M 0 -20 C 2.5 -7 7 -2.5 20 0 C 7 2.5 2.5 7 0 20 C -2.5 7 -7 2.5 -20 0 C -7 -2.5 -2.5 -7 0 -20 Z"/>
+  </defs>
+
+  <rect x="16" y="16" width="480" height="480" rx="104" fill="url(#l03bg)"/>
+
+  <circle cx="256" cy="256" r="240" fill="url(#l03halo)"/>
+
+  <circle cx="256" cy="256" r="206" fill="none" stroke="url(#l03gold)" stroke-width="4"
+          stroke-dasharray="14 26" stroke-linecap="round" opacity="0.4"/>
+
+  <g fill="#F5EFE2">
+    <use href="#l03spark" transform="translate(110 110) scale(0.55)" opacity="0.5"/>
+    <use href="#l03spark" transform="translate(402 402) scale(0.55)" opacity="0.5"/>
+  </g>
+
+  <path d="M 256 72 C 268 168 344 244 440 256 C 344 268 268 344 256 440 C 244 344 168 268 72 256 C 168 244 244 168 256 72 Z"
+        fill="url(#l03gold)"/>
+
+  <circle cx="256" cy="256" r="138" fill="url(#l03disc)" stroke="url(#l03gold)" stroke-width="9"/>
+  <circle cx="256" cy="256" r="124" fill="none" stroke="#F5EFE2" stroke-width="2" opacity="0.18"/>
+
+  <g fill="#F5EFE2">
+    <rect x="172" y="176" width="168" height="15" rx="7.5" opacity="0.95"/>
+    <rect x="192" y="212" width="128" height="15" rx="7.5" opacity="0.7"/>
+  </g>
+
+  <g fill="none" stroke-linecap="round">
+    <path d="M 160 268 q 24 -22 48 0 t 48 0 t 48 0 t 48 0" stroke="#4FD1C5" stroke-width="15"/>
+    <path d="M 176 314 q 20 -16 40 0 t 40 0 t 40 0 t 40 0" stroke="#7FE3D4" stroke-width="12" opacity="0.65"/>
+  </g>
+</svg>

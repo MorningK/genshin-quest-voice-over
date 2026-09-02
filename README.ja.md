@@ -1,5 +1,9 @@
 # genshin-quest-voice-over
 
+<p align="center">
+  <img src="assets/logo/logo.svg" alt="genshin-quest-voice-over" width="180">
+</p>
+
 > **言語 / Languages**：[中文](README.md) · [English](README.en.md) · [日本語](README.ja.md) · [한국어](README.ko.md)
 
 《原神》のボイスがないクエスト（主に世界任務）の会話テキストをリアルタイムに読み上げるサービスです。

@@ -1,5 +1,9 @@
 # genshin-quest-voice-over
 
+<p align="center">
+  <img src="assets/logo/logo.svg" alt="genshin-quest-voice-over" width="180">
+</p>
+
 > **Languages**: [中文](README.md) · [English](README.en.md) · [日本語](README.ja.md) · [한국어](README.ko.md)
 
 Provides real-time dialogue text read-aloud for quests in *Genshin Impact* that have no voice acting (mainly World Quests).

@@ -73,6 +73,10 @@ _FRONTEND_PATH = Path(__file__).parent / "static" / "index.html"
 # 站点图标路径（浏览器会隐式请求 /favicon.ico）
 _FAVICON_PATH = Path(__file__).parent / "static" / "favicon.ico"
 
+# 站点矢量图标路径，供前端 <link rel="icon" type="image/svg+xml"> 使用；
+# 与 favicon.ico 并存，现代浏览器优先采用 SVG，老旧浏览器仍回落到 ico
+_LOGO_PATH = Path(__file__).parent / "static" / "logo.svg"
+
 
 @dataclass
 class VoiceRequest:
@@ -267,6 +271,21 @@ def favicon() -> Response:
         return Response(status_code=204)
     # 显式声明 MIME，避免部分浏览器按 octet-stream 处理而放弃渲染
     return FileResponse(_FAVICON_PATH, media_type="image/vnd.microsoft.icon")
+
+
+@app.get("/logo.svg", include_in_schema=False)
+def logo() -> Response:
+    """返回站点矢量图标。
+
+    `static/` 未整体挂载为静态目录，页面里的 `/logo.svg` 需由本路由提供；
+    图标文件缺失时返回 204，与 favicon 行为保持一致。
+
+    Returns:
+        矢量图标响应；文件不存在时返回 204 No Content。
+    """
+    if not _LOGO_PATH.exists():
+        return Response(status_code=204)
+    return FileResponse(_LOGO_PATH, media_type="image/svg+xml")
 
 
 @app.post("/api/voice", tags=["voice"])

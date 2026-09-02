@@ -1,5 +1,9 @@
 # genshin-quest-voice-over
 
+<p align="center">
+  <img src="assets/logo/logo.svg" alt="genshin-quest-voice-over" width="180">
+</p>
+
 > **언어 / Languages**: [中文](README.md) · [English](README.en.md) · [日本語](README.ja.md) · [한국어](README.ko.md)
 
 《원신》에서 더빙이 없는 퀘스트(주로 세계 임무)의 대화 텍스트를 실시간으로 읽어주는 서비스입니다.
