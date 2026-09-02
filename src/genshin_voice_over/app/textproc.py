@@ -22,8 +22,10 @@ _SIMILARITY_THRESHOLD = 0.9
 # 句末标点集合：字幕逐字追加时常因帧间抖动在末尾多出/丢失这些标点，
 # 去标点后再比对可避免把同一句误判为新句而整句重播。
 # 字符类以 ] 开头将其视为字面量，类内 [ ( ) 等均为字面量，无需转义。
-_TRAILING_PUNCT_RE = re.compile(r"[]。！？…，、；：" "''（）()【】~… \u3000]+$")
-_LEADING_PUNCT_RE = re.compile(r"^[]。！？…，、；：" "''（）()【】~… \u3000]+")
+# 必须同时覆盖 ASCII 标点：OCR 对英文与半角符号同样会抖动，"OK!" ↔ "OK" 若不剥离标点，
+# 短句相似度会被拉到 0.8（2*2/5）而低于 0.9 阈值，导致同一句被整句重播。
+_TRAILING_PUNCT_RE = re.compile(r"[].!,;:?。！？…，、；：" "''（）()【】~… \u3000]+$")
+_LEADING_PUNCT_RE = re.compile(r"^[].!,;:?。！？…，、；：" "''（）()【】~… \u3000]+")
 
 # 游戏专属 UI 噪声规则：手柄按键提示、性能数据、UID、纯符号选项前缀等。
 # 每条规则命中即整行丢弃（这些文本不应被朗读）。
@@ -174,6 +176,10 @@ class TextTracker:
             and cleaned_stripped
             and SequenceMatcher(None, last_stripped, cleaned_stripped).ratio() >= _SIMILARITY_THRESHOLD
         ):
+            # 必须同步累积文本：抖动若发生在句子中段，沿用旧值会让下一帧追加文字时
+            # 前缀判断失败，从而把已朗读过的部分连同新文字一起整句重播。
+            # 存 cleaned（而非去标点后的值），与上面两个分支的口径保持一致。
+            self._last_text = cleaned
             return None
 
         self._last_text = cleaned

@@ -76,7 +76,7 @@ CI 有两个工作流：发布 Release 时分别构建 Windows exe（`.github/wo
 单帧流程 `_process_frame()`：
 1. 捕获一帧；与上一帧降采样副本逐像素比对，完全一致则跳过整帧（避免无效 OCR）——比对失败（OCR 异常）时不更新缓存以便重试。
 2. OCR 得到 `RecognitionResult`；优先取 `roi_text`（对白带聚焦文本，已剔除右侧选项菜单/FPS/GPU/UID 等 UI 噪声），为空回退全帧 `text`。
-3. `TextTracker.should_play()`（`src/genshin_voice_over/app/textproc.py`）判定是否播放：清洗 → UI 噪声过滤 → 变化检测。命中规则返回 `PlayRequest(text, kind)`——同句文字陆续追加时返回 `kind="delta"` 仅补播增量后缀；OCR 帧间抖动（相似度 ≥ 0.9）视为同句不重播。修改字幕去重逻辑时务必兼顾首帧空串前缀、标点抖动等已在代码中注释过的边界情况。
+3. `TextTracker.should_play()`（`src/genshin_voice_over/app/textproc.py`）判定是否播放：清洗 → UI 噪声过滤 → 变化检测。命中规则返回 `PlayRequest(text, kind)`——同句文字陆续追加时返回 `kind="delta"` 仅补播增量后缀；OCR 帧间抖动（相似度 ≥ 0.9）视为同句不重播。修改字幕去重逻辑时务必兼顾首帧空串前缀、标点抖动等已在代码中注释过的边界情况，并守住两条不变式：去标点比对必须**同时覆盖 ASCII 与中日标点**（否则 `OK!` ↔ `OK` 相似度仅 0.8，低于 0.9 阈值会整句重播）；判定为「帧间抖动」的分支必须**同步更新 `_last_text`**（否则抖动发生在句子中段时，下一帧追加文字会因前缀判断失败而把已朗读部分整句重播）。
 4. 流式合成+播放或降级一次性合成+播放；每步均有 debug 计时日志。
 
 ### 共享类型与预处理
@@ -102,7 +102,7 @@ CI 有两个工作流：发布 Release 时分别构建 Windows exe（`.github/wo
 ## Vercel 部署要点（修改 server.py / 依赖时须注意）
 
 - Vercel 只安装 `[project].dependencies`，不装可选组——Web/OCR/TTS 运行时依赖必须保留在基础依赖中，否则构建成功但运行时报 `ModuleNotFoundError`。
-- src-layout 下 `genshin_voice_over` 位于 `src/`，不再随进程 CWD 可见；`requirements.txt` 末尾的 `-e .` 用于在 Vercel 走 `pip install -r requirements.txt` 路径时兜底（走 pyproject 时无副作用）。
+- src-layout 下 `genshin_voice_over` 位于 `src/`，不再随进程 CWD 可见。**实测 Vercel 只按 `pyproject.toml` 的 `[project].dependencies` 安装依赖**：既不装可选组（所以 `requirements.txt` 里的 `uvicorn` 没被装上，可据此判断它当前没在读该文件），也**不会安装项目自身**。因此 `server.py` 在导入 `genshin_voice_over` 之前显式把 `src/` 插入 `sys.path`（带 `# noqa: E402`），这是 serverless 环境能导入包的关键，**调整 server.py 的导入结构时不要删掉这段**。`requirements.txt` 末尾的 `-e .` 仅作 Vercel 改走 `pip install -r` 路径时的兜底。
 - 必须启用 Large Functions（环境变量 `VERCEL_SUPPORT_LARGE_FUNCTIONS=1` + Fluid Compute），否则 "optimizing dependencies" 会剔除 onnxruntime/rapidocr 等大包。
 - 请求体上限 4.5MB：前端 `static/index.html` 已做客户端压缩，服务端 `/api/voice` 有 Content-Length 预检 + 分块累计双层防御。
 - `pyproject.toml` 用 `[tool.uv].exclude-dependencies = ["opencv-python"]` 全局排除 GUI 版 opencv（rapidocr 的传递依赖），改用 headless 版提供 cv2；此写法用字符串形式以兼容 Vercel 构建的 uv 0.10.x，勿改为对象形式。
