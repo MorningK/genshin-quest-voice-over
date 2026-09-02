@@ -18,6 +18,7 @@ import base64
 import json
 import logging
 import queue
+import sys
 import threading
 import traceback
 from contextlib import asynccontextmanager
@@ -26,16 +27,22 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 
-from genshin_voice_over.app.config import AppConfig
-from genshin_voice_over.app.textproc import clean_text, is_noise
-from genshin_voice_over.tts.base import TextToSpeech, TTSConfig
+# Vercel 只安装 [project].dependencies，不会安装项目自身，因此 src-layout 下的包
+# （src/genshin_voice_over）不在模块搜索路径中，运行时会 ModuleNotFoundError。
+# 这里显式把 src/ 加入 sys.path，让 serverless 与本地（uv sync 可编辑安装）行为一致；
+# 本地该路径已由可编辑安装提供，重复插入无副作用。必须在导入 genshin_voice_over 之前执行。
+sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
+
+from genshin_voice_over.app.config import AppConfig  # noqa: E402
+from genshin_voice_over.app.textproc import clean_text, is_noise  # noqa: E402
+from genshin_voice_over.tts.base import TextToSpeech, TTSConfig  # noqa: E402
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-    from genshin_voice_over.recognition.base import TextRecognizer
+    from genshin_voice_over.recognition.base import TextRecognizer  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +69,9 @@ _QUEUE_TIMEOUT = 0.5
 
 # 前端页面路径
 _FRONTEND_PATH = Path(__file__).parent / "static" / "index.html"
+
+# 站点图标路径（浏览器会隐式请求 /favicon.ico）
+_FAVICON_PATH = Path(__file__).parent / "static" / "favicon.ico"
 
 
 @dataclass
@@ -240,6 +250,22 @@ async def index() -> HTMLResponse:
             "<p>Frontend not found. POST /api/voice with an image to synthesize.</p></body></html>"
         )
     return HTMLResponse(content)
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon() -> Response:
+    """返回站点图标。
+
+    浏览器会隐式请求 `/favicon.ico`；未命中会在访问日志里留下 404 噪音。
+    图标文件缺失时返回 204，避免这条旁路请求干扰问题排查。
+
+    Returns:
+        图标文件的响应；文件不存在时返回 204 No Content。
+    """
+    if not _FAVICON_PATH.exists():
+        return Response(status_code=204)
+    # 显式声明 MIME，避免部分浏览器按 octet-stream 处理而放弃渲染
+    return FileResponse(_FAVICON_PATH, media_type="image/vnd.microsoft.icon")
 
 
 @app.post("/api/voice", tags=["voice"])
