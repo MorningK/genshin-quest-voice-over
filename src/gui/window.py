@@ -21,6 +21,8 @@ from src.app.config import (
     DEFAULT_LANGUAGE,
     DEFAULT_VOICE,
     AppConfig,
+    load_saved_config,
+    save_config,
 )
 from src.app.monitor import enumerate_monitors
 from src.app.region_selector import select_region_on_root
@@ -147,6 +149,8 @@ class MainWindow:
         self._build_log_area()
         self._attach_log_handler()
         self._runner = AppRunner(root, self._on_state_change)
+        # 表单构建完成后回填上次保存的配置（无配置时保持默认值）
+        self._load_saved_config()
         # 以空闲状态初始化一次按钮/表单可用性与状态栏显示
         self._on_state_change(RunnerState.IDLE, "")
         root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -670,24 +674,22 @@ class MainWindow:
         except ValueError as exc:
             raise _ValidationError(self._region_entries[0], str(exc)) from exc
 
-    def _collect_config(self) -> AppConfig | None:
-        """读取表单并构建 AppConfig；校验失败时弹窗提示并聚焦对应控件。
+    def _build_config(self) -> AppConfig:
+        """读取表单并构建 AppConfig，不做任何 UI 反馈。
 
         Returns:
-            配置对象；表单非法时返回 None。
+            配置对象。
+
+        Raises:
+            _ValidationError: 表单取值非法时抛出，携带需聚焦的控件。
         """
-        try:
-            fps = self._read_int(self._fps_var, self._fps_entry, "FPS", positive=True)
-            step = self._read_int(self._step_var, self._step_entry, "帧比对步长", positive=True)
-            threads = self._read_int(self._threads_var, self._threads_entry, "OCR 线程数", positive=False)
-            region = self._read_region()
-            model_path = self._model_path_var.get().strip() or None
-            if self._tts_var.get() == "vits" and model_path is None:
-                raise _ValidationError(self._model_path_entry, "使用 vits 后端必须指定模型路径。")
-        except _ValidationError as exc:
-            messagebox.showwarning("配置有误", str(exc), parent=self._root)
-            exc.widget.focus_set()
-            return None
+        fps = self._read_int(self._fps_var, self._fps_entry, "FPS", positive=True)
+        step = self._read_int(self._step_var, self._step_entry, "帧比对步长", positive=True)
+        threads = self._read_int(self._threads_var, self._threads_entry, "OCR 线程数", positive=False)
+        region = self._read_region()
+        model_path = self._model_path_var.get().strip() or None
+        if self._tts_var.get() == "vits" and model_path is None:
+            raise _ValidationError(self._model_path_entry, "使用 vits 后端必须指定模型路径。")
 
         return AppConfig(
             capture_backend=self._capture_var.get(),
@@ -707,15 +709,99 @@ class MainWindow:
             text_direction=self._text_direction_var.get(),
         )
 
+    def _collect_config(self) -> AppConfig | None:
+        """读取表单并构建 AppConfig；校验失败时弹窗提示并聚焦对应控件。
+
+        Returns:
+            配置对象；表单非法时返回 None。
+        """
+        try:
+            return self._build_config()
+        except _ValidationError as exc:
+            messagebox.showwarning("配置有误", str(exc), parent=self._root)
+            exc.widget.focus_set()
+            return None
+
+    def _try_collect_config(self) -> AppConfig | None:
+        """静默读取表单并构建 AppConfig，校验失败时不弹窗。
+
+        供窗口关闭等不希望打断用户的场景使用：此时表单可能处于半填状态，
+        与其弹窗阻拦退出，不如放弃本次保存。
+
+        Returns:
+            配置对象；表单非法时返回 None。
+        """
+        try:
+            return self._build_config()
+        except _ValidationError as exc:
+            logger.debug("Skip saving config, form is invalid: %s", exc)
+            return None
+
     # ------------------------------------------------------------------
     # 事件处理
     # ------------------------------------------------------------------
 
+    def _load_saved_config(self) -> None:
+        """加载上次保存的配置并回填表单。
+
+        无配置文件或文件损坏时保持表单默认值，仅记录日志，不弹窗打扰用户。
+        """
+        saved = load_saved_config()
+        if saved is None:
+            logger.info("No saved config found, form keeps default values.")
+            return
+        self._apply_config(saved)
+        logger.info("Saved config loaded into the form.")
+
+    def _apply_config(self, config: AppConfig) -> None:
+        """把配置对象回填到表单各控件。
+
+        Args:
+            config: 需要回填的运行配置。
+        """
+        self._capture_var.set(config.capture_backend)
+        self._ocr_var.set(config.ocr_backend)
+        self._tts_var.set(config.tts_backend)
+        self._gpu_var.set(config.use_gpu)
+        self._threads_var.set(str(config.ocr_threads))
+        self._voice_var.set(config.voice)
+        self._model_path_var.set(config.tts_model_path or "")
+        self._fps_var.set(str(config.fps))
+        self._step_var.set(str(config.frame_similarity_step))
+        self._language_var.set(config.language)
+        self._verbose_var.set(config.verbose)
+        self._full_frame_var.set(config.full_frame)
+        self._text_direction_var.set(config.text_direction)
+        self._apply_region(config.region)
+        # 紧跟区域回填：_sync_monitor_picker 只切换下拉框，不会清空已填坐标
+        self._sync_monitor_picker(config.monitor)
+        # 回填后刷新派生行为：vits 路径可用性、区域输入框可用性、日志级别
+        self._on_tts_backend_change()
+        self._on_region_mode_change()
+        self._on_verbose_toggle()
+
+    def _apply_region(self, region: Region | None) -> None:
+        """回填捕获区域并切换对应的区域模式。
+
+        Args:
+            region: 待回填的区域；None 表示退回全屏捕获。
+        """
+        if region is None:
+            self._clear_region()
+            return
+        values = (region.left, region.top, region.right, region.bottom)
+        self._region_mode_var.set("manual")
+        for entry, value in zip(self._region_entries, values, strict=False):
+            entry.configure(state="normal")
+            entry.delete(0, "end")
+            entry.insert(0, str(value))
+
     def _on_start(self) -> None:
-        """校验表单并启动后台管道。"""
+        """校验表单并启动后台管道，同时把本次配置落盘。"""
         config = self._collect_config()
         if config is None:
             return
+        save_config(config)
         self._runner.start(config)
 
     def _on_stop(self) -> None:
@@ -796,7 +882,7 @@ class MainWindow:
         self._sync_monitor_picker(selected.monitor)
 
     def _on_close(self) -> None:
-        """窗口关闭：停止日志轮询与管道、摘除日志并销毁窗口。"""
+        """窗口关闭：停止日志轮询与管道、保存配置、摘除日志并销毁窗口。"""
         # 先取消日志轮询定时器，避免销毁后回调残留触发已释放的控件
         if self._poll_after_id is not None:
             try:
@@ -812,4 +898,8 @@ class MainWindow:
                 self._runner.stop()
             # 降级路径为阻塞播放，长对白可能持续数秒，需等待其自然结束以释放资源
             self._runner.join(5.0)
+        # 关闭前再保存一次，覆盖用户最后一次的表单改动（静默，失败不影响退出）
+        config = self._try_collect_config()
+        if config is not None:
+            save_config(config)
         self._root.destroy()
