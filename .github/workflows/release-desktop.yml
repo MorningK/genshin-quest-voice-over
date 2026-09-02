@@ -1,0 +1,152 @@
+name: Build desktop executable
+
+# 发布 Release 时自动构建 Windows 可执行程序并上传为 Release 资产；
+# workflow_dispatch 用于随时手动验证打包链路，只上传 artifact、不动 Release。
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+# 上传 Release 资产需要写权限
+permissions:
+  contents: write
+
+# 同一 ref 上的重复构建互相取消，避免重复上传同名资产
+concurrency:
+  group: build-desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-windows:
+    name: Build Windows x64 one-dir bundle
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          # 后续步骤会执行仓库内的依赖安装与构建脚本，不持久化写权限 token
+          persist-credentials: false
+
+      - name: 安装 uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          # 缓存键默认跟随 uv.lock，依赖未变时跳过下载
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: 安装打包依赖
+        # --frozen 要求 uv.lock 与 pyproject.toml 一致，避免 CI 意外升级依赖；
+        # 包含 GUI 与全部运行期用到的可选后端（不含 PaddleOCR 与 GPU 版）
+        run: >
+          uv sync --frozen
+          --extra gui
+          --extra capture
+          --extra ocr-rapid
+          --extra ocr-preprocess
+          --extra tts-online
+          --extra playback
+          --group build
+
+      - name: 静态检查
+        run: uv run ruff check .
+
+      - name: 打包可执行文件
+        run: uv run pyinstaller gui.spec --noconfirm --distpath dist --workpath build/pyinstaller
+
+      - name: 校验打包资源
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $internal = 'dist/GenshinQuestVoiceOver/_internal'
+
+          # 主题与模型等非 .py 资源不会被当作模块收集，缺任意一项都会导致运行期失败
+          $requiredFiles = @(
+            "$internal/src/genshin_voice_over/gui/assets/genshin_theme.json",
+            "$internal/onnxruntime/capi/onnxruntime_providers_shared.dll"
+          )
+          foreach ($file in $requiredFiles) {
+            if (-not (Test-Path -LiteralPath $file)) {
+              Write-Error "Missing required resource: $file"
+            }
+          }
+
+          $themeCount = (Get-ChildItem "$internal/customtkinter/assets/themes" -Filter '*.json' -ErrorAction SilentlyContinue | Measure-Object).Count
+          if ($themeCount -lt 1) { Write-Error 'customtkinter themes not bundled' }
+
+          $modelCount = (Get-ChildItem "$internal/rapidocr" -Recurse -Filter '*.onnx' -ErrorAction SilentlyContinue | Measure-Object).Count
+          if ($modelCount -lt 1) { Write-Error 'rapidocr ONNX models not bundled' }
+
+          # miniaudio 的 cffi ABI 扩展（文件名带 ABI 标签，故按前缀匹配）；
+          # 缺它时 import miniaudio 失败，运行期会静默降级为 winsound 播放
+          if (-not (Get-ChildItem $internal -Filter '_cffi_backend*.pyd' -ErrorAction SilentlyContinue)) {
+            Write-Error '_cffi_backend extension not bundled'
+          }
+
+          Write-Host "Bundled resources OK (customtkinter themes: $themeCount, rapidocr models: $modelCount)"
+
+      - name: 启动冒烟
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = 'dist\GenshinQuestVoiceOver\GenshinQuestVoiceOver.exe'
+          $proc = Start-Process -FilePath $exe -PassThru
+          try {
+            # 主题文件或模型缺失时窗口构建会抛错，进程随即退出
+            Start-Sleep -Seconds 20
+            $proc.Refresh()
+            if ($proc.HasExited) {
+              Write-Error "GUI exited during startup (exit code: $($proc.ExitCode))"
+            }
+            if ($proc.MainWindowTitle -eq 'Quest Voice Over') {
+              Write-Host 'GUI window created: Quest Voice Over'
+            } else {
+              # 无交互会话里窗口标题可能取不到，只要进程存活就不判失败
+              Write-Warning "Unexpected window title: '$($proc.MainWindowTitle)'"
+            }
+          } finally {
+            if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
+          }
+
+      - name: 生成产物名
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Release 事件优先取 tag，手动触发退化为 ref 名；再做文件名安全化
+          $version = $env:RELEASE_TAG
+          if (-not $version) { $version = $env:REF_NAME }
+          $safe = $version -replace '[^A-Za-z0-9._-]', '-'
+          $asset = "genshin-quest-voice-over-$safe-win-x64.zip"
+          "ASSET_NAME=$asset" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Asset name: $asset"
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          REF_NAME: ${{ github.ref_name }}
+
+      - name: 打 zip 包
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Compress-Archive -Path 'dist/GenshinQuestVoiceOver' -DestinationPath $env:ASSET_NAME -CompressionLevel Optimal
+          $size = [math]::Round((Get-Item $env:ASSET_NAME).Length / 1MB, 1)
+          Write-Host "Package size: $size MB"
+
+      - name: 上传 Release 资产
+        if: github.event_name == 'release'
+        # v2 使用已弃用的 Node20 运行时，统一升至 v3
+        uses: softprops/action-gh-release@v3
+        with:
+          files: ${{ env.ASSET_NAME }}
+          # 允许重跑同一 Release 的构建时覆盖同名资产
+          # 注意：该输入名为 overwrite_files（v2.3.3 起），不是 overwrite
+          overwrite_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: genshin-quest-voice-over-win-x64
+          path: ${{ env.ASSET_NAME }}
+          retention-days: 7

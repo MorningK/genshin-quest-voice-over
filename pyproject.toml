@@ -1,13 +1,30 @@
 [project]
 name = "genshin-quest-voice-over"
 version = "0.1.0"
-description = "Genshin Impact quest dialogue voice-over generation system"
+description = "Real-time voice-over for unvoiced Genshin Impact quests: screen capture → OCR → TTS"
 readme = "README.md"
 requires-python = ">=3.12"
+license = { file = "LICENSE" }
+authors = [{ name = "Kui Chen" }]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: Apache Software License",
+    "Natural Language :: Chinese (Simplified)",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Games/Entertainment",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+
 # 基础运行依赖：含 Web 服务（FastAPI+SSE）与 OCR/TTS 引擎运行时。
 # 说明：Web 服务（server.py）需在 Vercel 上运行，Vercel 仅安装 [project].dependencies
 #       中的依赖（不安装可选组），故将 Web/OCR/TTS 运行时依赖全部置于此处，
 #       以确保 Vercel 原生打包时能正确装入并随函数 bundle 分发。
+# 注意：fastapi / python-multipart 虽仅 Web 端使用，但属于 Vercel 部署的硬需求，
+#       不得移入 web 可选组，否则线上服务会 ModuleNotFoundError。
 dependencies = [
     # 图像处理与 OCR（RapidOCR，默认后端）
     "numpy>=2.5.1",
@@ -20,6 +37,32 @@ dependencies = [
     "fastapi>=0.115.0",
     "python-multipart>=0.0.30",
 ]
+
+[project.urls]
+Homepage = "https://github.com/MorningK/genshin-quest-voice-over"
+Repository = "https://github.com/MorningK/genshin-quest-voice-over"
+Issues = "https://github.com/MorningK/genshin-quest-voice-over/issues"
+
+# PyPI 发行包只提供命令行入口；桌面 GUI 随打包的 exe 分发，不进 wheel。
+# 长短两个命令指向同一入口，方便记忆与补全。
+[project.scripts]
+gqvo = "genshin_voice_over.cli:main"
+genshin-quest-voice-over = "genshin_voice_over.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# src-layout：包根位于 src/genshin_voice_over；gui 子包仅供 PyInstaller 打包 exe，
+# 依赖 CustomTkinter 等桌面组件，不随 PyPI 发行包分发。
+[tool.hatch.build.targets.wheel]
+packages = ["src/genshin_voice_over"]
+exclude = ["src/genshin_voice_over/gui"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/genshin_voice_over", "README.md", "LICENSE", "main.py", "pyproject.toml"]
+# 与 wheel 保持一致：GUI 仅随 PyInstaller 打包的 exe 分发，也不进 sdist
+exclude = ["src/genshin_voice_over/gui"]
 
 [project.optional-dependencies]
 # 屏幕捕获后端
@@ -68,6 +111,9 @@ gui = [
 ]
 
 [dependency-groups]
+build = [
+    "pyinstaller>=6.22.2",
+]
 dev = [
     "pre-commit>=4.6.0",
     "pyrefly>=1.2.0",
@@ -108,6 +154,8 @@ exclude-dependencies = [
 target-version = "py312"
 # 代码行宽
 line-length = 120
+# 源码根目录：src-layout 下让 isort 把 genshin_voice_over 识别为第一方包
+src = ["src", "."]
 
 [tool.ruff.lint]
 # 启用的规则集
@@ -143,9 +191,9 @@ skip-magic-trailing-comma = false
 [tool.pyrefly]
 # 要类型检查的源码
 project-includes = ["src"]
-# 以项目根目录为导入根，使 `src` 成为顶层包，
-# 从而正确解析 `from src.xxx import ...` 这类导入
-search-path = ["."]
+# src-layout：以 src/ 为导入根，使 `genshin_voice_over` 成为顶层包，
+# 从而正确解析 `from genshin_voice_over.xxx import ...` 这类导入
+search-path = ["src"]
 # 虚拟环境中的第三方包路径，用于 IDE 语言服务器解析已安装依赖（如 numpy）。
 # 命令行 pyrefly 可从解释器自动获取，但 IDE 语言服务器依赖此显式配置。
 site-package-path = [".venv/lib/site-packages"]

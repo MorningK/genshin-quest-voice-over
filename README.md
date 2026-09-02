@@ -63,6 +63,40 @@ OCR 识别默认在 CPU 上运行，可通过 `--gpu` 开关启用 GPU 推理加
 
 > 字幕区域聚焦：安装 `ocr-preprocess` 依赖组（OpenCV）后，OCR 前会做灰度/对比度增强与轻度放大，并从识别结果中聚焦画面底部对白带文本，自动剔除右侧选项菜单、右上性能数据（FPS/GPU）、手柄按键提示（如 `X 播放中`）、UID 等 UI 噪声，仅朗读玩家实际看到的对话内容；`「」`/`《》` 包裹的 NPC 名字标签也会被过滤。缺依赖组时自动降级为全屏文本，不影响既有行为。
 
+## 从 PyPI 安装（命令行版）
+
+PyPI 发行包只包含命令行程序及其引擎后端，**不含桌面 GUI**（GUI 见下方打包章节）与 Web 服务。
+
+```bash
+# 仅安装主程序
+uv tool install genshin-quest-voice-over
+# 或
+pipx install genshin-quest-voice-over
+
+# 按需一并安装可选后端
+uv tool install "genshin-quest-voice-over[capture,ocr-rapid,ocr-preprocess,tts-online,playback]"
+```
+
+安装后使用 `gqvo` 命令（等价长名 `genshin-quest-voice-over`），参数与下文 `python main.py` 完全一致：
+
+```bash
+gqvo --help
+gqvo --select-region --fps 3
+```
+
+| 场景 | 需要安装的可选组 |
+| --- | --- |
+| 屏幕捕获 | `capture`（DXCam 仅 Windows；Linux / macOS 自动降级到 MSS） |
+| OCR 识别 | `ocr-rapid`（默认后端，ONNX 模型随包分发） |
+| 字幕区域聚焦 | `ocr-preprocess` |
+| 在线语音合成 | `tts-online`（Edge TTS，需联网） |
+| 流式播放 / MP3 解码 | `playback`（缺失时降级为 winsound，MP3 会被跳过） |
+
+> 说明：
+>
+> - 由于仓库内的 Web 服务部署在 Vercel（Vercel 只安装主依赖、不装可选组），主依赖中保留了 `fastapi` 与 `python-multipart`。CLI 本身不使用它们，但安装时会一并装上。
+> - `ocr-rapid`（CPU）与 `ocr-rapid-gpu`（GPU）的互斥由 **uv 的 `[tool.uv].conflicts`** 声明。用 `uv` 安装时会强制互斥；用 `pip` 安装时不会感知该约束，请二选一手动安装。
+
 ## 运行
 
 ```bash
@@ -114,6 +148,105 @@ uv run python main.py --reset-config
 - **异常降级**：文件缺失、内容损坏或结构版本不兼容时自动回退内置默认值并打印日志，不会中断启动；
   配置文件中的非法字段会被逐项丢弃，其余字段照常生效（区域四个坐标任一非法时整体丢弃并回退全屏，
   不会用 0 填补出错误的捕获范围）。
+
+## 打包为 Windows 可执行文件
+
+GUI（`gui.py`）用 PyInstaller 打包成 **Windows x64 的 one-dir 程序**，无需安装 Python 即可双击运行。
+打包配置统一放在仓库根目录的 `gui.spec`，本地与 CI 共用同一份配置以保证可复现。
+
+### 本地构建
+
+```bash
+# 安装打包所需的可选依赖组 + build 组（pyinstaller）
+# 未包含 ocr（PaddleOCR，体积过大）、ocr-rapid-gpu（与 CPU 版互斥）与 web（仅 Web 服务用）
+uv sync --extra gui --extra capture --extra ocr-rapid --extra ocr-preprocess --extra tts-online --extra playback --group build
+
+# 构建，产物在 dist/GenshinQuestVoiceOver/
+uv run pyinstaller gui.spec --noconfirm --distpath dist --workpath build/pyinstaller
+```
+
+产物结构：`dist/GenshinQuestVoiceOver/GenshinQuestVoiceOver.exe` + `_internal/`（依赖与模型）。
+分发时把整个 `GenshinQuestVoiceOver` 目录一起压缩即可，**不要单独拷走 exe**。
+
+采用 one-dir 而非单文件 exe：依赖含 onnxruntime / RapidOCR 模型 / OpenCV（约 275MB），
+单文件版每次启动都要整体解压到临时目录，启动慢且明显更容易被杀毒软件误报。
+
+### 打包范围
+
+| 依赖组 | 是否打包 | 说明 |
+| --- | --- | --- |
+| `gui`（CustomTkinter） | 是 | 含主题资源 `assets/themes/*.json` |
+| `capture`（DXCam / MSS） | 是 | DXCam 仅 Windows，经 comtypes 调用 DXGI/D3D11 |
+| `ocr-rapid`（RapidOCR + onnxruntime） | 是 | ONNX 模型随 wheel 分发，必须作为数据文件收集 |
+| `ocr-preprocess`（OpenCV headless） | 是 | 缺依赖时会自动降级为全屏文本 |
+| `tts-online`（Edge TTS） | 是 | 需联网 |
+| `playback`（miniaudio） | 是 | 缺失时降级为 winsound 一次性播放 |
+| `ocr`（PaddleOCR / PaddlePaddle） | 否 | 体积暴增数百 MB，仅作备选后端 |
+| `ocr-rapid-gpu`（onnxruntime-gpu） | 否 | 与 CPU 版互斥 |
+| Web 依赖（fastapi / uvicorn 等） | 否 | GUI 链路零引用，已显式排除 |
+
+主题文件 `src/genshin_voice_over/gui/assets/genshin_theme.json` 不是 `.py`，不会被当作模块收集，
+已由 `gui.spec` 的 `datas` 显式声明；`gui.py` 在冻结运行时以 `sys._MEIPASS` 为基目录解析该路径。
+
+### 发布流程
+
+`.github/workflows/release-desktop.yml` 在 **发布 Release（`release: published`）时自动触发**：
+检出 → `setup-uv`（缓存键为 `uv.lock`）→ `uv sync --frozen`（打包所需的可选组 + `build` 组）→ `ruff check`
+→ `pyinstaller gui.spec` → 校验主题/模型/DLL 是否随包 → 启动 exe 冒烟（20 秒内进程未退出即通过）
+→ 打 zip → 上传为 Release 资产。
+
+- 产物命名：`genshin-quest-voice-over-<tag>-win-x64.zip`，版本号取自 Release tag，同名资产会被覆盖。
+- 也可在 Actions 页面用 **Run workflow** 手动触发（仅上传 artifact，不污染 Release）。
+- 上传资产需要 `contents: write`，工作流已声明，使用内置 `GITHUB_TOKEN`，无需额外配置密钥。
+
+### 使用与排查
+
+解压后双击 `GenshinQuestVoiceOver.exe` 即可，日志显示在 GUI 的日志面板中（无控制台窗口）。
+配置与调试截图仍写入 `~/.genshin-quest-voice-over/`，与 exe 所在位置无关。
+
+| 现象 | 排查 |
+| --- | --- |
+| 启动无反应、闪退 | 检查 exe 是否与 `_internal/` 同级；确认杀软未隔离（one-dir 已比单文件更少误报，首次运行可能仍需放行） |
+| OCR 初始化失败 | 确认 `_internal/rapidocr/` 下的 `.onnx` 模型文件完整 |
+| 播放无声音 / 日志提示 `miniaudio is not installed` | 确认 `_internal/` 下 `_miniaudio.pyd` 与 `_cffi_backend*.pyd` 均在；后者由 miniaudio 的 cffi ABI 扩展运行期动态导入，缺失会静默降级为 winsound |
+| 捕获失败 | DXCam 需 Windows 10 及以上且游戏为独占全屏以外的模式，失败时会自动降级到 MSS |
+
+## 发布到 PyPI
+
+`.github/workflows/publish-pypi.yml` 在 **发布 Release（`release: published`）时自动触发**：
+`uv build` → 校验 `pyproject.toml` 的 version 与 Release tag 一致（容忍 `v` 前缀）
+→ wheel 体检（含 `cli.py` 与各引擎子包、不含 `gui/` 与 `server.py`）→ `twine check`
+→ 用 Trusted Publishing 上传。
+
+### 发版步骤
+
+1. 手动改 `pyproject.toml` 的 `[project].version`（版本号为手动维护，不由 tag 推导）。
+2. 提交后打同名 tag 并发布 Release，例如 `v0.2.0`；工作流会校验二者一致，不一致直接失败。
+3. 工作流结束后 PyPI 上即可 `pip install genshin-quest-voice-over==0.2.0`。
+
+### 一次性配置（PyPI 侧）
+
+发布采用 **Trusted Publishing（OIDC）**，无需 API token。在 PyPI 项目的
+*Publishing → Trusted Publishers* 新增一条，字段必须与工作流完全一致：
+
+| 字段 | 值 |
+| --- | --- |
+| PyPI Project Name | `genshin-quest-voice-over` |
+| Owner | `MorningK` |
+| Repository name | `genshin-quest-voice-over` |
+| Workflow name | `publish-pypi.yml` |
+| Environment name | `pypi` |
+
+### 本地发布（兜底）
+
+```bash
+uv build
+uv publish --token <pypi-token>   # 或先 export UV_PUBLISH_TOKEN=...
+```
+
+### 手动验证
+
+在 Actions 页面用 **Run workflow** 触发 `Publish to PyPI`：只构建、体检并上传 artifact，不发布。
 
 ## Web 服务（FastAPI + SSE）
 
@@ -186,18 +319,23 @@ vercel deploy    # 部署到生产
 
 ## 代码结构
 
-```
-main.py                      # 应用入口：CLI 参数解析 + VoiceOverApp 驱动
-src/
-├── common.py                # 共享数据类型（Point/Region/SelectedRegion）
-├── app/                     # 应用编排
-│   ├── config.py            # 运行配置与 CLI 解析
-│   ├── pipeline.py          # VoiceOverApp 主流程
-│   ├── region_selector.py   # 交互式屏幕区域框选（tkinter，支持多显示器）
-│   ├── monitor.py           # 显示器枚举与多屏坐标转换
-│   ├── textproc.py          # 文本清洗/去重/变化检测
-│   └── player.py            # 音频播放（winsound）
-├── capture/                 # 屏幕捕获（DXCam/MSS）
-├── recognition/             # OCR 识别（PaddleOCR/RapidOCR）
-└── tts/                     # TTS 合成（Edge TTS/VITS）
+```text
+main.py                              # 仓库内 CLI 启动薄壳，转发到 genshin_voice_over.cli:main
+gui.py                               # 桌面 GUI 入口（CustomTkinter）
+server.py                            # Web 服务入口（FastAPI + SSE）
+gui.spec                             # PyInstaller 打包配置（GUI → Windows exe）
+src/genshin_voice_over/              # 可导入顶层包（src-layout）
+├── cli.py                           # CLI 入口实现，console script `gqvo` 指向此处
+├── common.py                        # 共享数据类型（Point/Region/SelectedRegion）
+├── app/                             # 应用编排
+│   ├── config.py                    # 运行配置与 CLI 解析
+│   ├── pipeline.py                  # VoiceOverApp 主流程
+│   ├── region_selector.py           # 交互式屏幕区域框选（tkinter，支持多显示器）
+│   ├── monitor.py                   # 显示器枚举与多屏坐标转换
+│   ├── textproc.py                  # 文本清洗/去重/变化检测
+│   └── player.py                    # 音频播放（winsound / miniaudio）
+├── capture/                         # 屏幕捕获（DXCam/MSS）
+├── recognition/                     # OCR 识别（PaddleOCR/RapidOCR）
+├── tts/                             # TTS 合成（Edge TTS/VITS）
+└── gui/                             # 桌面 GUI（仅随 exe 分发，不进 PyPI 包）
 ```

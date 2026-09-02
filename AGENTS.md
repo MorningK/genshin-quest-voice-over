@@ -31,15 +31,25 @@ uv run ruff format .
 
 # 类型检查（pyrefly，仅检查 src/ 目录）
 uv run pyrefly check
+
+# 打包 Windows 可执行程序（GUI，配置见根目录 gui.spec）
+uv sync --extra gui --extra capture --extra ocr-rapid --extra ocr-preprocess --extra tts-online --extra playback --group build
+uv run pyinstaller gui.spec --noconfirm --distpath dist --workpath build/pyinstaller
+
+# 构建 / 发布 PyPI 发行包（仅 CLI，不含 GUI 与 Web 代码）
+uv build
+uv publish --token <pypi-token>
 ```
 
-本仓库**没有测试套件**，也没有 CI 配置；验证方式为运行程序 + ruff/pyrefly 静态检查。
+本仓库**没有测试套件**；验证方式为运行程序 + ruff/pyrefly 静态检查 + 打包产物体检。
+CI 有两个工作流：发布 Release 时分别构建 Windows exe（`.github/workflows/release-desktop.yml`）
+与上传 PyPI（`.github/workflows/publish-pypi.yml`）。
 
 ## 架构
 
 ### 双入口共享同一套引擎抽象
 
-- **桌面端**：`main.py` → 解析 CLI 参数为 `AppConfig`（`src/app/config.py`）→ 驱动 `VoiceOverApp`（`src/app/pipeline.py`）以固定帧率循环执行完整管道。
+- **桌面端**：`main.py` → 转发到 `src/genshin_voice_over/cli.py`（PyPI console script `gqvo` 的同一入口）→ 解析 CLI 参数为 `AppConfig`（`src/genshin_voice_over/app/config.py`）→ 驱动 `VoiceOverApp`（`src/genshin_voice_over/app/pipeline.py`）以固定帧率循环执行完整管道。
 - **Web 端**：根目录 `server.py` 暴露 FastAPI `app`（Vercel 入口）。核心端点 `POST /api/voice` 为 SSE 流式接口：后台线程执行 OCR + 流式 TTS，事件经有界 `queue.Queue` 投递给异步生成器格式化为 `event: text/audio/done/error`。OCR/TTS 引擎采用懒加载 + 单例缓存（`_get_engine`，缓存键包含影响初始化的配置字段）。
 
 两端复用同一套模块：Web 端处理流程刻意对齐桌面端管道（decode → recognize → 取 `roi_text or text` → `clean_text`/`is_noise` → 流式合成、失败降级一次性合成）。
@@ -50,9 +60,9 @@ uv run pyrefly check
 
 | 域 | 抽象基类 | 实现 | 配置数据类 |
 |---|---|---|---|
-| `src/capture/` | `ScreenCapture` | DXCam / MSS | `CaptureConfig` |
-| `src/recognition/` | `TextRecognizer` | RapidOCR（默认）/ PaddleOCR | `RecognitionConfig` |
-| `src/tts/` | `TextToSpeech` | Edge TTS（在线，默认）/ VITS（离线骨架） | `TTSConfig` |
+| `src/genshin_voice_over/capture/` | `ScreenCapture` | DXCam / MSS | `CaptureConfig` |
+| `src/genshin_voice_over/recognition/` | `TextRecognizer` | RapidOCR（默认）/ PaddleOCR | `RecognitionConfig` |
+| `src/genshin_voice_over/tts/` | `TextToSpeech` | Edge TTS（在线，默认）/ VITS（离线骨架） | `TTSConfig` |
 
 生命周期约定为 `initialize() → 工作循环 → release()`；配置对象由 `AppConfig.to_capture_config()/to_recognition_config()/to_tts_config()` 统一构造。
 
@@ -66,13 +76,13 @@ uv run pyrefly check
 单帧流程 `_process_frame()`：
 1. 捕获一帧；与上一帧降采样副本逐像素比对，完全一致则跳过整帧（避免无效 OCR）——比对失败（OCR 异常）时不更新缓存以便重试。
 2. OCR 得到 `RecognitionResult`；优先取 `roi_text`（对白带聚焦文本，已剔除右侧选项菜单/FPS/GPU/UID 等 UI 噪声），为空回退全帧 `text`。
-3. `TextTracker.should_play()`（`src/app/textproc.py`）判定是否播放：清洗 → UI 噪声过滤 → 变化检测。命中规则返回 `PlayRequest(text, kind)`——同句文字陆续追加时返回 `kind="delta"` 仅补播增量后缀；OCR 帧间抖动（相似度 ≥ 0.9）视为同句不重播。修改字幕去重逻辑时务必兼顾首帧空串前缀、标点抖动等已在代码中注释过的边界情况。
+3. `TextTracker.should_play()`（`src/genshin_voice_over/app/textproc.py`）判定是否播放：清洗 → UI 噪声过滤 → 变化检测。命中规则返回 `PlayRequest(text, kind)`——同句文字陆续追加时返回 `kind="delta"` 仅补播增量后缀；OCR 帧间抖动（相似度 ≥ 0.9）视为同句不重播。修改字幕去重逻辑时务必兼顾首帧空串前缀、标点抖动等已在代码中注释过的边界情况。
 4. 流式合成+播放或降级一次性合成+播放；每步均有 debug 计时日志。
 
 ### 共享类型与预处理
 
-- 跨模块通用数据类放在 `src/common.py`（`Point`/`Region`/`SelectedRegion`）；仅单模块使用的数据类定义在各自模块内。**禁止用匿名 tuple 表达复合结构**（见下方风格约束）。
-- `src/recognition/preprocess.py` 实现图像增强与底部对白带 ROI 聚焦（OpenCV），依赖缺失时由上层自动跳过。
+- 跨模块通用数据类放在 `src/genshin_voice_over/common.py`（`Point`/`Region`/`SelectedRegion`）；仅单模块使用的数据类定义在各自模块内。**禁止用匿名 tuple 表达复合结构**（见下方风格约束）。
+- `src/genshin_voice_over/recognition/preprocess.py` 实现图像增强与底部对白带 ROI 聚焦（OpenCV），依赖缺失时由上层自动跳过。
 - `base.py` 中还实现了识别框阅读顺序排序（垂直重叠判行、行间上下、行内左右），供各 OCR 后端复用。
 
 ## 代码风格约定（仓库强约束）
@@ -82,9 +92,17 @@ uv run pyrefly check
 - 单个方法不超过 100 行。
 - ruff 启用了 E/W/F/I/N/UP/B/C4/SIM/TCH 规则集；行宽 120 由 formatter 处理。
 
+## 包布局与打包要点
+
+- 项目采用 **src-layout**：可导入顶层包是 `genshin_voice_over`，位于 `src/genshin_voice_over/`；导入一律写作 `from genshin_voice_over.xxx import ...`，不再有顶层 `src` 包。
+- `uv sync` 会以可编辑方式安装本项目，`genshin_voice_over` 直接可见；`pyrefly` 的 `search-path` 为 `src`、`ruff` 的 `src` 为 `["src", "."]`，改动包结构时需同步。
+- PyPI 发行包（构建后端 hatchling）只含 CLI：`[tool.hatch.build.targets.wheel]` 与 `[tool.hatch.build.targets.sdist]` 都显式 `exclude` 了 `gui` 子包，根 `server.py` 也不在包内。GUI 仅随 PyInstaller 打包的 exe 分发。
+- 主依赖里的 `fastapi` / `python-multipart` 虽只被 Web 端使用，却是 Vercel 的硬需求，**不得移入 `web` 可选组**。
+
 ## Vercel 部署要点（修改 server.py / 依赖时须注意）
 
 - Vercel 只安装 `[project].dependencies`，不装可选组——Web/OCR/TTS 运行时依赖必须保留在基础依赖中，否则构建成功但运行时报 `ModuleNotFoundError`。
+- src-layout 下 `genshin_voice_over` 位于 `src/`，不再随进程 CWD 可见；`requirements.txt` 末尾的 `-e .` 用于在 Vercel 走 `pip install -r requirements.txt` 路径时兜底（走 pyproject 时无副作用）。
 - 必须启用 Large Functions（环境变量 `VERCEL_SUPPORT_LARGE_FUNCTIONS=1` + Fluid Compute），否则 "optimizing dependencies" 会剔除 onnxruntime/rapidocr 等大包。
 - 请求体上限 4.5MB：前端 `static/index.html` 已做客户端压缩，服务端 `/api/voice` 有 Content-Length 预检 + 分块累计双层防御。
 - `pyproject.toml` 用 `[tool.uv].exclude-dependencies = ["opencv-python"]` 全局排除 GUI 版 opencv（rapidocr 的传递依赖），改用 headless 版提供 cv2；此写法用字符串形式以兼容 Vercel 构建的 uv 0.10.x，勿改为对象形式。

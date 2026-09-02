@@ -1,0 +1,127 @@
+name: Publish to PyPI
+
+# 发布 Release 时自动构建并上传 PyPI；workflow_dispatch 只构建不上传，
+# 用于在正式发版前验证打包链路。
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-pypi-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build distributions
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          # 发布链路会执行仓库内的构建脚本，不持久化写权限 token
+          persist-credentials: false
+
+      - name: 安装 uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          # 缓存键默认跟随 uv.lock，依赖未变时跳过下载
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+          # 按触发 ref 隔离缓存，避免其他 ref 写入的缓存影响待发布产物
+          cache-suffix: ${{ github.ref_name }}
+
+      - name: 构建 sdist 与 wheel
+        run: uv build
+
+      - name: 校验版本号与 Release tag 一致
+        if: github.event_name == 'release'
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          version=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          # 容忍 tag 带 v 前缀
+          tag="${RELEASE_TAG#v}"
+          if [ "$version" != "$tag" ]; then
+            echo "::error::pyproject version '$version' 与 Release tag '$RELEASE_TAG' 不一致"
+            exit 1
+          fi
+          echo "Version $version matches tag $RELEASE_TAG"
+
+      - name: 产物体检
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import glob
+          import sys
+          import zipfile
+
+          wheels = glob.glob("dist/*.whl")
+          if len(wheels) != 1:
+              sys.exit(f"expected exactly one wheel, got {wheels}")
+          names = zipfile.ZipFile(wheels[0]).namelist()
+
+          required = (
+              "genshin_voice_over/cli.py",
+              "genshin_voice_over/app/pipeline.py",
+              "genshin_voice_over/capture/base.py",
+              "genshin_voice_over/recognition/base.py",
+              "genshin_voice_over/tts/base.py",
+              "genshin_voice_over/common.py",
+          )
+          missing = [name for name in required if name not in names]
+          if missing:
+              sys.exit(f"wheel missing required modules: {missing}")
+
+          # GUI 仅随 exe 分发，Web 服务只走 Vercel，二者都不应出现在 PyPI 包里
+          forbidden = [
+              name for name in names
+              if name.startswith("genshin_voice_over/gui/") or name == "server.py"
+          ]
+          if forbidden:
+              sys.exit(f"wheel contains files that must not be published: {forbidden}")
+
+          print(f"wheel contents OK ({len(names)} entries)")
+          PY
+
+      - name: 元数据检查
+        run: uvx twine check dist/*
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 7
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    # 手动触发只构建，避免误发布
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # 环境名需与 PyPI 侧 Trusted Publisher 配置一致
+    environment: pypi
+    permissions:
+      # Trusted Publishing（OIDC）换取上传令牌所必需
+      id-token: write
+
+    steps:
+      - name: 下载构建产物
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: 上传到 PyPI
+        # 固定到不可变 commit SHA：本 job 持有 id-token: write，可铸造 PyPI 上传凭据，
+        # 不应让上游分支引用的变动改变发布步骤（对应 release/v1 分支头，2026-07-28）
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # release/v1
