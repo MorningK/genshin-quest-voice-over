@@ -101,6 +101,13 @@ class RecognitionResult:
         speaker: 说话人名字；未识别到（如无名字标签，或颜色不可用而降级）时为空串。
             保留画面中的成对包裹符号，如「杜麦尼」。
         speaker_title: 说话人头衔，如「冒险家协会接待员」；未识别到时为空串。
+        dialogue_gated: 对话门控是否对本帧给出过**权威判定**。为 True 时 ``roi_text``
+            为空代表「画面中确实没有对白」，调用方**不得**再回退到全帧 ``text``——
+            否则门控结论被架空，菜单文本会照旧被朗读出来（见
+            ``docs/dialogue-region-discrimination.md`` 第 11 章的失败归因）。
+            为 False 表示门控未运行（缺 OpenCV，或输入非 numpy 数组而无法取色），
+            此时沿用以全帧 ``text`` 兜底的旧语义，保证降级路径行为不变。
+            消费方应统一使用 ``app.textproc.resolve_dialogue_text`` 解析朗读候选。
     """
 
     text: str = ""
@@ -111,6 +118,7 @@ class RecognitionResult:
     roi_text: str = ""
     speaker: str = ""
     speaker_title: str = ""
+    dialogue_gated: bool = False
 
 
 # 判断两个区域是否同行的垂直重叠比例阈值

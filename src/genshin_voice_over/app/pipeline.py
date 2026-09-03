@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 from genshin_voice_over.app.player import MiniAudioPlayer, WinsoundPlayer
-from genshin_voice_over.app.textproc import TextTracker
+from genshin_voice_over.app.textproc import TextTracker, resolve_dialogue_text
 from genshin_voice_over.app.voice_router import SpeakerVoiceRouter
 from genshin_voice_over.recognition.preprocess import crop_dialogue_band
 
@@ -391,8 +391,15 @@ class VoiceOverApp:
 
         # 优先使用聚焦后的对白正文（已剔除右侧选项菜单/性能数据等 UI 噪声，且不含
         # 说话人名字与头衔——后两者已在识别阶段分离到 recognition.speaker /
-        # speaker_title），为空时回退到全帧文本，保证无 ROI 预处理时行为不变
-        dialogue_text = recognition.roi_text or recognition.text
+        # speaker_title）。门控给出过判定时，roi_text 为空即代表「本帧无对白」，
+        # 必须抑制而不回退全帧文本，否则菜单文本会被当对白朗读出来；
+        # 门控未运行（缺 OpenCV / 非 ndarray 输入）时才沿用全帧文本兜底。
+        dialogue_text = resolve_dialogue_text(recognition.roi_text, recognition.text, recognition.dialogue_gated)
+        if not dialogue_text and recognition.text:
+            logger.debug(
+                "Dialogue gate found no dialogue while %d text boxes exist; speech suppressed.",
+                len(recognition.boxes),
+            )
 
         step_start = time.perf_counter()
         # 说话人只旁路传递：朗读内容始终是 request.text，speaker 不进入 TTS

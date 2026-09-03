@@ -5,9 +5,14 @@
 说话人切换 TTS 音色使用）。
 
 分类依据来自 ``docs/dialogue-region-discrimination.md`` 的实测标定：以文字主色的
-**饱和度**为主判据（实测对白 S=9、说话人名 S=252~255、头衔 S=252，与对白零重叠），
+**饱和度**为主判据（实测对白 S=8~9、说话人名 S=252~255、头衔 S=252，与对白零重叠），
 几何比例作为前后置约束。垂直坐标无法分离对白（cy 0.815）与头衔（cy 0.801），
 故必须先按饱和度分出对白，再在金色框内按垂直位置区分名字与头衔。
+
+对白侧的判据在后续语料扩充时升级为**饱和度 + 色相的二维窗口**：对白正文绘制在
+半透明深色面板上，呈``H13~15 / S8~9``的暖调低饱和灰；而界面文本是纯中性白
+（``S=0``）或高饱和暖白（``H20~24 / S14~29``）。仅靠饱和度无法区分对白与纯白
+界面文本，仅靠色相亦不可（OpenCV 对 ``S=0`` 给出 ``H=0``），必须联合判定。
 
 颜色不可用时（无原始帧可供取色的降级路径）整体委托给既有的
 ``extract_dialogue_boxes`` 做纯几何过滤，行为与改造前完全一致，且不做说话人提取。
@@ -82,7 +87,13 @@ class DialogueGateConfig:
             头衔 S=252，两侧零重叠；取 100 时两侧安全余量分别为 91 与 152。
         gold_hue_min: 金色色相下限。实测说话人名与头衔 H=22。
         gold_hue_max: 金色色相上限。
-        dialogue_saturation_max: 对白允许的最大饱和度。实测对白 S=9。
+        dialogue_saturation_max: 对白允许的最大饱和度。实测对白 S=8~9。
+        dialogue_saturation_min: 对白允许的最小饱和度，用于排除**纯白**界面文本。
+            对白正文叠加在半透明深色对白面板上，实测恒为暖调低饱和灰（S=8~9）；
+            而菜单、物品名、数值等界面文本为纯中性白（S=0）。取 4 时两侧余量各为 4。
+        dialogue_hue_max: 对白允许的最大色相，用于排除**暖白**界面文本。
+            实测对白 H=13~15；界面暖白文本（如「使用原粹树脂」「烬城勇者绘卷」）
+            H=20~24。取 17.5 时两侧余量各为 2.5。
         text_percentile: 框内文字像素的取样分位。p92 实测最稳定（对白在 p80 与
             p92 上取值完全相同，而 p65 会被背景拉偏）。
         option_cx_min: 右侧选项菜单的水平中心下界。实测选项 cx>=0.696、对白 cx<=0.500。
@@ -99,6 +110,8 @@ class DialogueGateConfig:
     gold_hue_min: float = 10.0
     gold_hue_max: float = 40.0
     dialogue_saturation_max: float = 40.0
+    dialogue_saturation_min: float = 4.0
+    dialogue_hue_max: float = 17.5
     text_percentile: int = 92
     option_cx_min: float = 0.62
     top_hud_cy_max: float = 0.15
@@ -240,6 +253,30 @@ def _is_gold(visual: BoxVisual, config: DialogueGateConfig) -> bool:
         True 表示为金色。
     """
     return visual.saturation >= config.gold_saturation_min and config.gold_hue_min <= visual.hue <= config.gold_hue_max
+
+
+def _is_dialogue_white(visual: BoxVisual, config: DialogueGateConfig) -> bool:
+    """判断文字主色是否为对白正文特有的「暖调低饱和灰」。
+
+    对白正文绘制在半透明深色对白面板上，实测恒为 ``H13~15 / S8~9`` 的暖调低饱和灰；
+    界面文本则是**纯中性白**（``S=0``，如 UID、数值、物品名）或**高饱和暖白**
+    （``H20~24 / S14~29``，如菜单说明、按钮文案），两者都落在对白区间之外。
+
+    饱和度与色相必须**联合判定**：单看饱和度时纯白界面文本落在下界之内，
+    单看色相时纯白界面文本（OpenCV 对 S=0 给出 H=0）落在上界之内，任一单规则
+    都无法分离，实测无任何单条标量规则可完全分离正负样本。
+
+    Args:
+        visual: 文字主色特征。
+        config: 门控阈值配置。
+
+    Returns:
+        True 表示为对白正文的文字颜色。
+    """
+    return (
+        config.dialogue_saturation_min <= visual.saturation <= config.dialogue_saturation_max
+        and visual.hue <= config.dialogue_hue_max
+    )
 
 
 def _is_inside_dialogue_window(geometry: BoxGeometry, config: DialogueGateConfig, cy: float | None) -> bool:
@@ -447,7 +484,7 @@ def _classify_with_visuals(
         # 宁可漏读一句，也不要把说话人名字当对白朗读出来。
         if visual is None:
             continue
-        if visual.saturation > config.dialogue_saturation_max:
+        if not _is_dialogue_white(visual, config):
             continue
         if not _is_inside_dialogue_window(geometry, config, cy):
             continue

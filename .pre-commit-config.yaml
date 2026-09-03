@@ -17,6 +17,11 @@ repos:
       - id: check-json               # 检查 JSON 文件格式
       - id: check-toml               # 检查 TOML 文件格式
       - id: check-added-large-files  # 禁止提交大文件
+        # examples/ 是刻意维护的截图语料，供对话门控做离线回归（见
+        # scripts/verify_examples.py 与 docs/dialogue-region-discrimination.md）。
+        # 截图无法压到 500 KB 以下而不损伤文字主色——而门控正依赖该特征，
+        # 因此对该目录豁免体积检查；其余路径仍受 500 KB 约束。
+        exclude: ^examples/
       - id: detect-private-key       # 检测是否误提交私钥
       - id: check-merge-conflict     # 检测未解决的合并冲突
 
