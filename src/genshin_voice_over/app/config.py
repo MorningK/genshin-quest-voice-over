@@ -228,6 +228,9 @@ class AppConfig:
             此开关仅在默认全屏模式下有效。
         text_direction: 是否启用 OCR 文字方向检测（横排/竖排）。游戏字幕恒为横排，
             默认关闭以省去每帧的方向分类器推理。
+        speaker_voice: 是否按说话人切换 TTS 音色。开启后不同 NPC 会分配到不同
+            音色，未识别到说话人时沿用 voice；分配结果持久化到独立的
+            voice-map.json，使同一 NPC 跨会话保持同一音色。默认开启。
     """
 
     capture_backend: str = "dxcam"
@@ -245,6 +248,7 @@ class AppConfig:
     ocr_threads: int = DEFAULT_MAX_INFERENCE_THREADS
     full_frame: bool = False
     text_direction: bool = False
+    speaker_voice: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         """序列化为可写入 JSON 的字典。
@@ -277,6 +281,7 @@ class AppConfig:
             "ocr_threads": self.ocr_threads,
             "full_frame": self.full_frame,
             "text_direction": self.text_direction,
+            "speaker_voice": self.speaker_voice,
         }
 
     @classmethod
@@ -309,6 +314,7 @@ class AppConfig:
             ocr_threads=_read_int(data, "ocr_threads", defaults.ocr_threads),
             full_frame=_read_bool(data, "full_frame", defaults.full_frame),
             text_direction=_read_bool(data, "text_direction", defaults.text_direction),
+            speaker_voice=_read_bool(data, "speaker_voice", defaults.speaker_voice),
         )
 
     @staticmethod
@@ -519,6 +525,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="关闭 OCR 文字方向检测（用于覆盖配置文件中已保存的 text_direction=true）",
     )
     parser.add_argument(
+        "--speaker-voice",
+        default=None,
+        action="store_true",
+        dest="speaker_voice",
+        help=(
+            "按说话人切换 TTS 音色（默认开启；不同 NPC 分配到不同音色，分配结果持久化，已保存的关闭状态可用本参数恢复）"
+        ),
+    )
+    parser.add_argument(
+        "--no-speaker-voice",
+        default=None,
+        action="store_false",
+        dest="speaker_voice",
+        help="关闭按说话人切换音色，统一使用 --voice 指定的音色（用于覆盖配置文件中已保存的开启状态）",
+    )
+    parser.add_argument(
         "--reset-config",
         default=False,
         action="store_true",
@@ -576,6 +598,7 @@ def _apply_cli_overrides(base: AppConfig, args: argparse.Namespace) -> AppConfig
         ocr_threads=base.ocr_threads if args.ocr_threads is None else args.ocr_threads,
         full_frame=base.full_frame if args.full_frame is None else args.full_frame,
         text_direction=base.text_direction if args.text_direction is None else args.text_direction,
+        speaker_voice=base.speaker_voice if args.speaker_voice is None else args.speaker_voice,
     )
 
 

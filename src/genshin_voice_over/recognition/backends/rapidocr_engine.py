@@ -14,7 +14,6 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     import numpy as np
 
-from genshin_voice_over.app.textproc import filter_ui_noise
 from genshin_voice_over.common import Point
 from genshin_voice_over.recognition.base import (
     RecognitionBox,
@@ -23,11 +22,18 @@ from genshin_voice_over.recognition.base import (
     TextRecognizer,
     sort_boxes_reading_order,
 )
+from genshin_voice_over.recognition.dialogue_gate import (
+    DEFAULT_GATE_CONFIG,
+    ViewportBasis,
+    build_box_visuals,
+    classify_boxes,
+    split_dialogue_parts,
+)
 from genshin_voice_over.recognition.preprocess import (
     DEFAULT_MAX_INPUT_SIZE,
+    ImageTransform,
     crop_dialogue_band,
     downscale_to_max_side,
-    extract_dialogue_boxes,
     preprocess_frame,
 )
 
@@ -203,28 +209,42 @@ class RapidOCREngine(TextRecognizer):
         avg_confidence = sum(confidences) / len(confidences) if confidences else 0.0
         full_text = "".join(b.text for b in ordered_boxes)
 
-        # 聚焦底部对白带：剔除右侧选项菜单/右上性能数据/名字标签等 UI 噪声，
-        # 仅保留玩家实际看到的对话文本，提升后续朗读准确率。
-        # 仅当预处理真正生效 (applied=True) 时才生成 roi_text;
+        # 聚焦底部对白带并把说话人与对白分开：仅对白进入 roi_text 供朗读，
+        # 说话人名字与头衔旁路输出，避免它们被当成对白读出来。
+        # 仅当预处理真正生效 (applied=True) 时才分类；
         # 缺 OpenCV 时 applied=False, roi_text 置空, pipeline 回退到全帧文本.
         roi_text = ""
-        if applied:
-            # _np 为方法开头的运行时惰性导入（文件头 np 仅类型检查可见）
-            image_shape = enhanced.shape[:2] if isinstance(enhanced, _np.ndarray) else None
-            # 输入已天然等价于对白带（自动裁剪或手动选区）时跳过带顶比例剔除，
-            # 否则字幕会被误划出带外导致 roi_text 残缺或恒空而回退全帧文本
-            roi_boxes = extract_dialogue_boxes(ordered_boxes, image_shape, pre_cropped=band_input)
-            # 逐框过滤游戏 UI 噪声 (UID/手柄提示等), 命中噪声的框不计入 roi_text,
-            # 避免锚定模式在与其他文本同帧时无法匹配
-            roi_parts = [b.text for b in roi_boxes if filter_ui_noise(b.text) is not None]
-            roi_text = "".join(roi_parts)
-            if roi_boxes and len(roi_parts) != len(roi_boxes):
-                logger.debug(
-                    "ROI filtered %d/%d boxes, dialogue text: %s",
-                    len(roi_boxes) - len(roi_parts),
-                    len(roi_boxes),
-                    roi_text,
+        speaker = ""
+        speaker_title = ""
+        # _np 为方法开头的运行时惰性导入（文件头 np 仅类型检查可见）
+        if applied and isinstance(enhanced, _np.ndarray):
+            image_shape = enhanced.shape[:2]
+            # 颜色取样必须用原始 BGR 帧：preprocess_frame 已把 OCR 输入转为灰度并做
+            # CLAHE，颜色在进入识别前即丢失。输入非 numpy 时无从映射坐标，跳过取色。
+            visuals = (
+                build_box_visuals(
+                    image,
+                    self._measure_transform(image, ocr_input, enhanced, band_was_cropped),
+                    ordered_boxes,
+                    DEFAULT_GATE_CONFIG.text_percentile,
                 )
+                if isinstance(image, _np.ndarray)
+                else None
+            )
+            # 输入已天然等价于对白带（自动裁剪或手动选区）时，降级路径会跳过带顶比例
+            # 剔除，否则字幕会被误划出带外导致 roi_text 残缺或恒空而回退全帧文本
+            classified = classify_boxes(
+                ordered_boxes,
+                image_shape,
+                DEFAULT_GATE_CONFIG,
+                visuals,
+                vertical=self._build_viewport_basis(image, ocr_input, band_was_cropped, band_input),
+                pre_cropped=band_input,
+            )
+            parts = split_dialogue_parts(classified)
+            roi_text = parts.dialogue
+            speaker = parts.speaker
+            speaker_title = parts.title
 
         return RecognitionResult(
             text=full_text,
@@ -233,6 +253,77 @@ class RapidOCREngine(TextRecognizer):
             timestamp=time.time(),
             language_detected=self._config.language,
             roi_text=roi_text,
+            speaker=speaker,
+            speaker_title=speaker_title,
+        )
+
+    @staticmethod
+    def _measure_transform(
+        source: np.ndarray,
+        ocr_input: object,
+        enhanced: np.ndarray,
+        band_was_cropped: bool,
+    ) -> ImageTransform:
+        """测量从 OCR 输入图像到原始帧的几何变换，用于把识别框映射回原始帧取色。
+
+        通过读取各步数组形状反推，而非记录前处理函数的内部缩放公式，因此日后
+        调整缩放或插值方式时无需同步改动此处。
+
+        Args:
+            source: 原始捕获帧，即未裁带、未缩放的输入。
+            ocr_input: 裁带之后、降采样之前的图像（未裁带时即 source 本身）。
+            enhanced: 最终送入 OCR 的图像，识别框坐标位于其坐标系。
+            band_was_cropped: 是否真的执行过对白带裁剪。只有真正裁剪才产生
+                垂直偏移，与仅影响垂直过滤判定的 is_band_input 不同。
+
+        Returns:
+            可用于把识别框映射回原始帧坐标系的变换；输入非 numpy 数组时返回
+            恒等变换（该情形下不可能发生裁剪，且调用方本就不会映射取色）。
+        """
+        import numpy as np  # 运行时惰性导入：文件头 np 仅供类型检查
+
+        if not isinstance(ocr_input, np.ndarray):
+            return ImageTransform(scale_x=1.0, scale_y=1.0, offset_y=0)
+        return ImageTransform(
+            scale_x=ocr_input.shape[1] / enhanced.shape[1],
+            scale_y=ocr_input.shape[0] / enhanced.shape[0],
+            offset_y=source.shape[0] - ocr_input.shape[0] if band_was_cropped else 0,
+        )
+
+    @staticmethod
+    def _build_viewport_basis(
+        source: object,
+        ocr_input: object,
+        band_was_cropped: bool,
+        band_input: bool,
+    ) -> ViewportBasis:
+        """构造 OCR 视口与完整画面的对应关系，供门控换算纵向比例。
+
+        开启对白带裁剪后，送入 OCR 的图像只剩画面底部一条，框的纵向比例是相对
+        这条带计算的，须换算回整画面口径才能与门控阈值比较；手动选区模式下送入
+        OCR 的图像即用户选区本身，引擎无从得知它相对整块屏幕的位置，故标记为
+        未知并跳过纵向窗口判定（与改造前跳过带顶比例剔除的行为一致）。
+
+        Args:
+            source: 原始捕获帧。
+            ocr_input: 裁带之后、降采样之前的图像。
+            band_was_cropped: 是否真的执行过对白带裁剪。
+            band_input: 输入是否已天然等价于对白带（含手动选区情形）。
+
+        Returns:
+            视口与完整画面的对应关系。
+        """
+        import numpy as np  # 运行时惰性导入：文件头 np 仅供类型检查
+
+        if not band_was_cropped:
+            return ViewportBasis(known=False) if band_input else ViewportBasis()
+        # 裁带只在输入为 numpy 数组时发生，此处两者必同为数组；
+        # 仍显式校验以满足类型检查，并在异常情形下退回整画面口径。
+        if not isinstance(source, np.ndarray) or not isinstance(ocr_input, np.ndarray):
+            return ViewportBasis()
+        return ViewportBasis(
+            top_ratio=(source.shape[0] - ocr_input.shape[0]) / source.shape[0],
+            height_ratio=ocr_input.shape[0] / source.shape[0],
         )
 
     def release(self) -> None:

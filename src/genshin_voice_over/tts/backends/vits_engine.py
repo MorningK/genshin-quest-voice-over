@@ -60,11 +60,12 @@ class VITSEngine(TextToSpeech):
             "Please provide a model_path and install the required inference dependencies."
         )
 
-    def synthesize(self, text: str) -> TTSResult:
+    def synthesize(self, text: str, voice: str | None = None) -> TTSResult:
         """合成文本为语音。
 
         Args:
             text: 待合成的文本内容。
+            voice: 本次合成使用的音色标识；骨架未实现多音色，该参数被忽略。
 
         Returns:
             TTSResult 对象。
@@ -74,11 +75,12 @@ class VITSEngine(TextToSpeech):
         """
         raise RuntimeError(f"VITSEngine is a skeleton and cannot synthesize text: {text}")
 
-    def synthesize_stream(self, text: str) -> Iterator[TTSResult]:
+    def synthesize_stream(self, text: str, voice: str | None = None) -> Iterator[TTSResult]:
         """流式合成文本为语音。
 
         Args:
             text: 待合成的文本内容。
+            voice: 本次合成使用的音色标识；骨架未实现多音色，该参数被忽略。
 
         Yields:
             TTSResult 对象。

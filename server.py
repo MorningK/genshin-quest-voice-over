@@ -4,7 +4,8 @@
 对外提供 SSE 流式接口，接收上传图片与可选参数，返回识别文本与边合成边下发的 MP3 语音分片。
 
 处理流程（对齐 `src/genshin_voice_over/app/pipeline.py`）：
-    解码图片 → OCR recognize → 取 roi_text or text → 文本清洗 → 流式 TTS 合成 → SSE 下发
+    解码图片 → OCR recognize（分离对白正文与说话人）→ 取 roi_text or text
+    → 文本清洗 → 流式 TTS 合成 → SSE 下发（说话人随 text 事件旁路返回，不参与合成）
 
 运行方式：
     本地：uv run uvicorn server:app --host 0.0.0.0 --port 8000
@@ -37,6 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
 from genshin_voice_over.app.config import AppConfig  # noqa: E402
 from genshin_voice_over.app.textproc import clean_text, is_noise  # noqa: E402
+from genshin_voice_over.app.voice_router import SpeakerVoiceRouter  # noqa: E402
 from genshin_voice_over.tts.base import TextToSpeech, TTSConfig  # noqa: E402
 
 if TYPE_CHECKING:
@@ -301,7 +303,7 @@ async def voice(
     """SSE 流式接口：对上传图片做 OCR 识别并流式返回 TTS 语音。
 
     事件序列：
-        event: text    识别结果（text / roi_text / confidence / language）
+        event: text    识别结果（text / roi_text / speaker / speaker_title / voice / confidence / language）
         event: audio   音频分片（data 为 base64 编码的 MP3 字节，is_final 标记结尾）
         event: done    合成完成
         event: error   处理出错
@@ -440,6 +442,12 @@ def _run_worker(
             )
             return
 
+        # 2. 按说话人解析音色：需先取得 TTS 引擎才能读到其可用音色清单。
+        # 每次请求独立构造路由器（仅多读一个小 JSON），换来同一 NPC 跨请求音色一致；
+        # 并发请求下映射写入可能相互覆盖，最坏情况是重新分配一次，不影响合成结果。
+        tts = _get_engine("tts", request.tts_backend, config, tts_config)
+        voice = SpeakerVoiceRouter(request.voice, tts.available_voices).resolve(recognition.speaker).voice
+
         _put_event(
             event_queue,
             (
@@ -447,6 +455,9 @@ def _run_worker(
                 {
                     "text": cleaned,
                     "roi_text": recognition.roi_text,
+                    "speaker": recognition.speaker,
+                    "speaker_title": recognition.speaker_title,
+                    "voice": voice,
                     "confidence": recognition.confidence,
                     "language": recognition.language_detected,
                 },
@@ -454,11 +465,10 @@ def _run_worker(
             cancel_event,
         )
 
-        # 2. 流式 TTS 合成
-        tts = _get_engine("tts", request.tts_backend, config, tts_config)
+        # 3. 流式 TTS 合成
         if tts.supports_streaming:
             try:
-                for chunk in tts.synthesize_stream(cleaned):
+                for chunk in tts.synthesize_stream(cleaned, voice):
                     _put_event(
                         event_queue,
                         (
@@ -475,8 +485,8 @@ def _run_worker(
             except Exception as exc:  # noqa: BLE001 - 流式失败降级为一次性合成
                 logger.warning("Streaming TTS failed, fallback to one-shot: %s", exc)
 
-        # 3. 降级：一次性合成
-        result = tts.synthesize(cleaned)
+        # 4. 降级：一次性合成
+        result = tts.synthesize(cleaned, voice)
         _put_event(
             event_queue,
             ("audio", {"data": base64.b64encode(result.audio_data).decode("ascii"), "is_final": True}),

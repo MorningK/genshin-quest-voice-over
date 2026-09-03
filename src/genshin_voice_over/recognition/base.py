@@ -95,7 +95,12 @@ class RecognitionResult:
         boxes: 按阅读顺序排列的各文字区域列表。
         timestamp: 识别完成时间戳（Unix 秒）。
         language_detected: 实际检测到的语言。
-        roi_text: 聚焦底部对白带后的对话文本；不含右侧选项菜单、右上性能数据、名字标签等 UI 噪声。
+        roi_text: 聚焦底部对白带后的对白正文，是唯一供朗读消费的内容。不含右侧选项
+            菜单、右上性能数据等 UI 噪声，也不含说话人名字与头衔——后两者已分别
+            提取到 speaker 与 speaker_title，避免被当作对白朗读出来。
+        speaker: 说话人名字；未识别到（如无名字标签，或颜色不可用而降级）时为空串。
+            保留画面中的成对包裹符号，如「杜麦尼」。
+        speaker_title: 说话人头衔，如「冒险家协会接待员」；未识别到时为空串。
     """
 
     text: str = ""
@@ -104,6 +109,8 @@ class RecognitionResult:
     timestamp: float = 0.0
     language_detected: str = ""
     roi_text: str = ""
+    speaker: str = ""
+    speaker_title: str = ""
 
 
 # 判断两个区域是否同行的垂直重叠比例阈值

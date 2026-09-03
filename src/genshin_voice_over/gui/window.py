@@ -24,6 +24,7 @@ from genshin_voice_over.app.config import (
     load_saved_config,
     save_config,
 )
+from genshin_voice_over.app.file_log import attach_file_logging, detach_file_logging
 from genshin_voice_over.app.monitor import enumerate_monitors
 from genshin_voice_over.app.region_selector import select_region_on_root
 from genshin_voice_over.common import MonitorTarget, Region, SelectedRegion
@@ -640,7 +641,7 @@ class MainWindow:
         Raises:
             _ValidationError: 非整数或不满足取值约束。
         """
-        raw = str(var.get()).strip()
+        raw = var.get().strip()
         try:
             value = int(raw)
         except ValueError as exc:
@@ -850,8 +851,18 @@ class MainWindow:
         self._browse_btn.configure(state=state)
 
     def _on_verbose_toggle(self) -> None:
-        """verbose 开关即时切换根日志级别，无需重启应用。"""
-        logging.getLogger().setLevel(logging.DEBUG if self._verbose_var.get() else logging.INFO)
+        """verbose 开关即时切换根日志级别与日志落盘，无需重启应用。
+
+        落盘用独立的挂载/摘除函数处理，**不走 logging.basicConfig(force=True)**：
+        force 会清空根 logger 上已挂载的全部 handler，把本窗口的日志面板
+        handler 一并摘掉，导致实时日志区停止刷新。
+        """
+        verbose = self._verbose_var.get()
+        logging.getLogger().setLevel(logging.DEBUG if verbose else logging.INFO)
+        if verbose:
+            attach_file_logging()
+        else:
+            detach_file_logging()
 
     def _on_browse_model(self) -> None:
         """弹出文件选择对话框，选取 vits 模型文件并回填路径。"""
@@ -902,4 +913,7 @@ class MainWindow:
         config = self._try_collect_config()
         if config is not None:
             save_config(config)
+        # 收尾阶段（停止管道、等待线程、保存配置）仍会产出诊断日志，且往往是最有
+        # 价值的退出前记录；等这些日志都写入后再摘除文件日志，避免它们丢失。
+        detach_file_logging()
         self._root.destroy()

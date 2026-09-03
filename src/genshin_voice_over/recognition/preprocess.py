@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 try:
@@ -17,8 +18,11 @@ try:
 except ImportError:  # pragma: no cover - numpy 为既有依赖，仅为类型安全兜底
     np = None  # type: ignore[assignment]
 
+# Region 需在运行时可用：ImageTransform.map_region 要构造它。
+# common 不依赖本包内任何模块，故此处导入不会形成循环。
+from genshin_voice_over.common import Region
+
 if TYPE_CHECKING:
-    from genshin_voice_over.common import Region
     from genshin_voice_over.recognition.base import RecognitionBox
 
 logger = logging.getLogger(__name__)
@@ -43,6 +47,49 @@ _REFERENCE_HEIGHT = 1080
 # 送入 OCR 的图像最大边长上限。过大的输入（如 4K 全屏帧）会显著拉高推理耗时与
 # CPU/GPU 资源占用，进而与游戏抢占性能；对字幕场景，限制边长后不影响识别准确率。
 DEFAULT_MAX_INPUT_SIZE = 1280
+
+
+@dataclass(frozen=True)
+class ImageTransform:
+    """OCR 输入图像坐标系 → 原始帧坐标系的映射。
+
+    送入 OCR 的图像最多经历三段改变尺寸的变换（对白带裁剪、最长边降采样、
+    预处理放大），而 OCR 输出的框坐标位于最终图像坐标系。文字主色必须在
+    **原始 BGR 帧**上取样（``preprocess_frame`` 已把图像转为灰度并做 CLAHE，
+    颜色在进入识别前即丢失），因此需要把框坐标映射回原始帧。
+
+    参数由调用方读取各步数组形状反推得出，而非记录各前处理函数的内部公式：
+    这样即使缩放公式或插值方式日后调整，映射依然正确。
+
+    Attributes:
+        scale_x: 横坐标缩放比，取「原始帧宽度 / OCR 输入图像宽度」。
+        scale_y: 纵坐标缩放比，取「原始帧高度 / OCR 输入图像高度」。
+        offset_y: 对白带裁剪造成的垂直偏移；未裁剪时为 0。注意只有真正执行
+            了裁剪才有偏移，与仅影响垂直过滤判定的 ``is_band_input`` 不同。
+    """
+
+    scale_x: float
+    scale_y: float
+    offset_y: int = 0
+
+    def map_region(self, box: RecognitionBox) -> Region | None:
+        """把识别框映射回原始帧坐标系。
+
+        Args:
+            box: 待映射的识别框，坐标位于 OCR 输入图像坐标系。
+
+        Returns:
+            原始帧坐标系下的矩形区域；框缺少有效坐标时返回 None。
+        """
+        if not box.points:
+            return None
+        xs = [p.x for p in box.points]
+        ys = [p.y for p in box.points]
+        left = round(min(xs) * self.scale_x)
+        right = round(max(xs) * self.scale_x)
+        top = round(min(ys) * self.scale_y) + self.offset_y
+        bottom = round(max(ys) * self.scale_y) + self.offset_y
+        return Region(left=left, top=top, right=right, bottom=bottom)
 
 
 def _center_x(box: RecognitionBox) -> int:
