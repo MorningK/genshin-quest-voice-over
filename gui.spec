@@ -42,8 +42,14 @@ for _package in _COLLECT_PACKAGES:
     hiddenimports += _package_hiddenimports
 
 # 原神主题色板：非 .py 资源，PyInstaller 不会当作模块收集，必须显式声明。
-# 目标目录需与 gui.py 的 _resolve_theme_path() 解析出的相对路径一致。
+# 目标目录需与 gui.py 的 _resolve_asset_path() 解析出的相对路径一致。
 datas += [("src/genshin_voice_over/gui/assets/genshin_theme.json", "src/genshin_voice_over/gui/assets")]
+
+# 应用图标（由 assets/logo/logo.svg 派生的多尺寸 ico）：
+# - 顶层用途：作为 EXE 图标写入 exe 资源（见下方 EXE(icon=...)）
+# - 运行时用途：GUI 启动时通过 iconbitmap 设置窗口标题栏/任务栏图标，
+#   故必须同时收集进解包目录，目标目录需与 gui.py 解析出的相对路径一致
+datas += [("assets/logo/logo.ico", "assets/logo")]
 
 # dxcam 经 comtypes 调用 DXGI / D3D11 的 COM 接口，comtypes 的 gen 缓存于运行期按需生成，
 # 静态分析扫描不到
@@ -98,7 +104,9 @@ exe = EXE(  # noqa: F821 - 变量由 PyInstaller 注入构建上下文
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,
+    # 自定义应用图标：Windows 端只接受 .ico，多尺寸（16~256）覆盖资源管理器、
+    # 窗口标题栏与任务栏的显示需求
+    icon="assets/logo/logo.ico",
 )
 
 coll = COLLECT(  # noqa: F821 - 变量由 PyInstaller 注入构建上下文

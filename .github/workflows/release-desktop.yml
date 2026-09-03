@@ -61,9 +61,10 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $internal = 'dist/GenshinQuestVoiceOver/_internal'
 
-          # 主题与模型等非 .py 资源不会被当作模块收集，缺任意一项都会导致运行期失败
+          # 主题、图标与模型等非 .py 资源不会被当作模块收集，缺任意一项都会导致运行期失败
           $requiredFiles = @(
             "$internal/src/genshin_voice_over/gui/assets/genshin_theme.json",
+            "$internal/assets/logo/logo.ico",
             "$internal/onnxruntime/capi/onnxruntime_providers_shared.dll"
           )
           foreach ($file in $requiredFiles) {
