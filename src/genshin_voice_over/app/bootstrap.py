@@ -78,7 +78,7 @@ def ensure_dpi_awareness() -> int:
         ctypes.windll.shcore.SetProcessDpiAwareness(DPI_AWARENESS_PER_MONITOR)
         awareness = wintypes.UINT()
         ctypes.windll.shcore.GetProcessDpiAwareness(None, ctypes.byref(awareness))
-        return int(awareness.value)
+        return awareness.value
     except (OSError, AttributeError, ValueError) as exc:
         # 感知模式往往已被依赖库提前设置，此时无法更改，按实际值继续即可
         logger.debug("Failed to set per-monitor DPI awareness, keep current: %s", exc)
@@ -99,7 +99,7 @@ def read_dpi_awareness() -> int:
 
         awareness = wintypes.UINT()
         ctypes.windll.shcore.GetProcessDpiAwareness(None, ctypes.byref(awareness))
-        return int(awareness.value)
+        return awareness.value
     except (OSError, AttributeError, ValueError):
         return DPI_AWARENESS_PER_MONITOR
 

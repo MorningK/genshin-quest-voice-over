@@ -641,7 +641,7 @@ class MainWindow:
         Raises:
             _ValidationError: 非整数或不满足取值约束。
         """
-        raw = str(var.get()).strip()
+        raw = var.get().strip()
         try:
             value = int(raw)
         except ValueError as exc:
