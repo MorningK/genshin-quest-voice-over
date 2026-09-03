@@ -26,12 +26,20 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import threading
 from dataclasses import dataclass
 
 from genshin_voice_over.app.speaker_gender import SpeakerGender, infer_gender, load_gender_overrides
 from genshin_voice_over.app.voice_map_store import load_voice_map, save_voice_map
 
 logger = logging.getLogger(__name__)
+
+# 音色映射「读取 → 合并 → 写回」的进程内互斥锁。
+# Web 端每个 /api/voice 请求都会新建一个路由器并各自持有一份映射快照，并发
+# 请求若各自直接写回，后写的会整体覆盖先写的分配。加锁并在锁内重读快照可避免
+# 丢失更新。仅保护本进程内并发——跨进程（CLI 与 GUI 同时运行）仍可能相互覆盖，
+# 但那只会让某个说话人重新分配一次，不影响合成结果。
+_MAP_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -205,10 +213,16 @@ class SpeakerVoiceRouter:
             return VoiceAssignment(voice=cached)
 
         gender = infer_gender(speaker, self._gender_overrides)
-        voice = self._assign(speaker, gender)
-        self._mapping[speaker] = voice
-        if not save_voice_map(self._mapping):
-            logger.debug("Voice map persistence unavailable; assignment kept in memory only.")
+        with _MAP_LOCK:
+            # 锁内重读快照再合并：本进程可能同时存在多个路由器（Web 端每个请求
+            # 一个），若各自用持有的旧快照直接写回，后写的会整体覆盖先写的分配。
+            merged = load_voice_map() or {}
+            merged.update(self._mapping)
+            voice = self._assign(speaker, gender, merged)
+            merged[speaker] = voice
+            self._mapping = merged
+            if not save_voice_map(merged):
+                logger.debug("Voice map persistence unavailable; assignment kept in memory only.")
         logger.info(
             "Assigned voice %s to speaker %s (gender=%s)",
             voice,
@@ -231,7 +245,7 @@ class SpeakerVoiceRouter:
         subset = [voice for voice in self._pool if self._genders.get(voice) is gender]
         return subset or self._pool
 
-    def _assign(self, speaker: str, gender: SpeakerGender | None) -> str:
+    def _assign(self, speaker: str, gender: SpeakerGender | None, mapping: dict[str, str]) -> str:
         """为说话人挑选音色，优先取哈希位，被占用则在池中循环顺延。
 
         已知性别时**只在同性别子池内**挑选：子池耗尽也留在池内接受碰撞，不跨
@@ -240,6 +254,8 @@ class SpeakerVoiceRouter:
         Args:
             speaker: 说话人名字。
             gender: 推断出的性别；None 表示不限制。
+            mapping: 用于判断哪些音色已占用的映射表，应包含磁盘快照与本次
+                会话的分配，避免与并发请求撞车。
 
         Returns:
             选中的音色；池中音色全部占用时回到哈希位接受碰撞。
@@ -247,7 +263,7 @@ class SpeakerVoiceRouter:
         candidates = self._pool_for(gender)
         size = len(candidates)
         start = self._stable_index(speaker, size)
-        used = {voice for voice in self._mapping.values() if voice in set(candidates)}
+        used = {voice for voice in mapping.values() if voice in set(candidates)}
         for offset in range(size):
             candidate = candidates[(start + offset) % size]
             if candidate not in used:

@@ -902,8 +902,6 @@ class MainWindow:
                 logger.debug("Failed to cancel log poll timer.")
             self._poll_after_id = None
         logging.getLogger().removeHandler(self._log_handler)
-        # 同步摘除文件日志，确保缓冲区落盘后再关闭文件
-        detach_file_logging()
         state = self._runner.state
         if state in (RunnerState.RUNNING, RunnerState.STOPPING):
             # STOPPING 说明停止信号已发出，无需重复调用 stop()
@@ -915,4 +913,7 @@ class MainWindow:
         config = self._try_collect_config()
         if config is not None:
             save_config(config)
+        # 收尾阶段（停止管道、等待线程、保存配置）仍会产出诊断日志，且往往是最有
+        # 价值的退出前记录；等这些日志都写入后再摘除文件日志，避免它们丢失。
+        detach_file_logging()
         self._root.destroy()

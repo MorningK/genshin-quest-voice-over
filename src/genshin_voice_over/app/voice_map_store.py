@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import uuid
 from typing import TYPE_CHECKING, Any
 
 from genshin_voice_over.common import get_app_dir
@@ -35,11 +36,13 @@ VOICE_MAP_FILE_NAME = "voice-map.json"
 # 映射结构版本号：结构不兼容变更时递增，读取到更高版本的文件会整体忽略
 VOICE_MAP_VERSION = 1
 
-# 写盘时的临时文件命名模板：形如 voice-map.json.<pid>.tmp。
+# 写盘时的临时文件命名模板：形如 voice-map.json.<pid>.<token>.tmp。
 # 带上进程 PID 是为了让每个进程只操作自己的临时文件——CLI 与 GUI 可能同时
-# 运行并同时保存，共用一个固定临时名会互相覆盖或删除对方的临时文件。
+# 运行并同时保存，共用一个固定临时名会互相覆盖或删除对方的临时文件；
+# 再带一段随机 token 是因为同一进程内的多个工作线程（Web 端每个 /api/voice
+# 请求一个）会并发写盘，仅靠 PID 会让它们争用同一个临时文件。
 # 临时文件必须与正式文件同目录，确保 os.replace 落在同一文件系统内保持原子性。
-_TEMP_NAME_TEMPLATE = "{name}.{pid}.tmp"
+_TEMP_NAME_TEMPLATE = "{name}.{pid}.{token}.tmp"
 
 
 def get_voice_map_path() -> Path:
@@ -115,7 +118,7 @@ def save_voice_map(mapping: dict[str, str]) -> bool:
         True 表示写入成功；False 表示写入失败（详见 warning 日志）。
     """
     path = get_voice_map_path()
-    temp_path = path.with_name(_TEMP_NAME_TEMPLATE.format(name=path.name, pid=os.getpid()))
+    temp_path = path.with_name(_TEMP_NAME_TEMPLATE.format(name=path.name, pid=os.getpid(), token=uuid.uuid4().hex))
     payload: dict[str, Any] = {"version": VOICE_MAP_VERSION, "mapping": mapping}
     try:
         path.parent.mkdir(parents=True, exist_ok=True)

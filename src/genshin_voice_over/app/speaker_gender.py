@@ -214,14 +214,21 @@ def load_gender_overrides() -> dict[str, SpeakerGender]:
         return {}
 
     overrides: dict[str, SpeakerGender] = {}
+    skipped = 0
     for speaker, value in raw_genders.items():
         if not isinstance(speaker, str) or not speaker:
+            skipped += 1
             continue
         try:
             overrides[speaker] = SpeakerGender(value)
         except ValueError:
-            logger.debug("Ignoring unknown gender %r for speaker %s", value, speaker)
+            skipped += 1
 
+    # 只记录条数、不逐条记录内容：说话人名字取自用户文件，明文写日志会被 CodeQL
+    # 的 clear-text-logging 规则标记为敏感数据泄露。排查时用「条数 + 文件路径」
+    # 已足以定位是哪份文件写错了。
+    if skipped:
+        logger.warning("Ignored %d invalid entries in gender override file %s", skipped, path)
     if overrides:
         logger.info("Loaded %d gender overrides from %s", len(overrides), path)
     return overrides

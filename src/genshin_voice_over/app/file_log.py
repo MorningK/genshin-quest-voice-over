@@ -110,8 +110,10 @@ class CappedFileHandler(logging.FileHandler):
         # 故按编码后的字节长度累计，而非依赖文件位置。
         needed = len(payload.encode(self.encoding or "utf-8", _LOG_ERRORS))
         try:
-            if self._written + needed > self.max_bytes:
-                self._truncate()
+            if self._written + needed > self.max_bytes and not self._truncate():
+                # 截断失败：跳过本条，按 logging 约定交由 handleError 报告
+                self.handleError(record)
+                return
             stream = self.stream
             if stream is None:
                 stream = self._open()
@@ -123,10 +125,14 @@ class CappedFileHandler(logging.FileHandler):
         except Exception:  # noqa: BLE001 - 与 logging 框架约定一致：写出失败走 handleError
             self.handleError(record)
 
-    def _truncate(self) -> None:
+    def _truncate(self) -> bool:
         """清空日志文件并写入截断标记，使文件始终只保留最近的内容。
 
-        截断失败时保留原文件继续写入：宁可短暂超限，也不要丢掉日志能力。
+        截断失败时尽力恢复可写流并返回 False，让调用方继续尝试写入——宁可
+        短暂超限，也不要丢掉日志能力。
+
+        Returns:
+            True 表示截断成功且流已重新打开；False 表示截断失败。
         """
         marker = _TRUNCATE_MARKER.format(limit=self.max_bytes)
         encoding = self.encoding or "utf-8"
@@ -137,11 +143,16 @@ class CappedFileHandler(logging.FileHandler):
         try:
             with open(self.baseFilename, "w", encoding=encoding, errors=_LOG_ERRORS) as handle:
                 handle.write(marker)
-        except OSError as exc:
-            logger.warning("Failed to truncate log file %s: %s", self.baseFilename, exc)
-            return
+        except OSError:
+            # 此处绝不可写日志：本 handler 挂在根 logger 上，任何日志都会重新进入
+            # emit，截断持续失败时将递归直至 RecursionError。
+            # 尽力重开流后把失败交给 emit 用 handleError 报告。
+            with contextlib.suppress(OSError):
+                self.stream = self._open()
+            return False
         self.stream = self._open()
         self._written = len(marker.encode(encoding, _LOG_ERRORS))
+        return True
 
 
 def get_log_path() -> Path:

@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import sys
 
-from genshin_voice_over.app.file_log import attach_file_logging
+from genshin_voice_over.app.file_log import attach_file_logging, detach_file_logging
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +29,10 @@ def setup_logging(verbose: bool = False) -> None:
             info 及以上且不落盘。
     """
     level = logging.DEBUG if verbose else logging.INFO
+    # basicConfig(force=True) 会移除并关闭根 logger 上已有的全部 handler，文件日志
+    # handler 也在其列；但文件日志模块仍持有该 handler 的引用，若不先摘除，
+    # 后续 attach_file_logging() 会误判「已挂载」而跳过，导致 verbose 日志不再落盘。
+    detach_file_logging()
     if sys.stderr is None:
         logging.basicConfig(
             level=level,
