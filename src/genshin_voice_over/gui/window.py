@@ -24,6 +24,7 @@ from genshin_voice_over.app.config import (
     load_saved_config,
     save_config,
 )
+from genshin_voice_over.app.file_log import attach_file_logging, detach_file_logging
 from genshin_voice_over.app.monitor import enumerate_monitors
 from genshin_voice_over.app.region_selector import select_region_on_root
 from genshin_voice_over.common import MonitorTarget, Region, SelectedRegion
@@ -850,8 +851,18 @@ class MainWindow:
         self._browse_btn.configure(state=state)
 
     def _on_verbose_toggle(self) -> None:
-        """verbose 开关即时切换根日志级别，无需重启应用。"""
-        logging.getLogger().setLevel(logging.DEBUG if self._verbose_var.get() else logging.INFO)
+        """verbose 开关即时切换根日志级别与日志落盘，无需重启应用。
+
+        落盘用独立的挂载/摘除函数处理，**不走 logging.basicConfig(force=True)**：
+        force 会清空根 logger 上已挂载的全部 handler，把本窗口的日志面板
+        handler 一并摘掉，导致实时日志区停止刷新。
+        """
+        verbose = self._verbose_var.get()
+        logging.getLogger().setLevel(logging.DEBUG if verbose else logging.INFO)
+        if verbose:
+            attach_file_logging()
+        else:
+            detach_file_logging()
 
     def _on_browse_model(self) -> None:
         """弹出文件选择对话框，选取 vits 模型文件并回填路径。"""
@@ -891,6 +902,8 @@ class MainWindow:
                 logger.debug("Failed to cancel log poll timer.")
             self._poll_after_id = None
         logging.getLogger().removeHandler(self._log_handler)
+        # 同步摘除文件日志，确保缓冲区落盘后再关闭文件
+        detach_file_logging()
         state = self._runner.state
         if state in (RunnerState.RUNNING, RunnerState.STOPPING):
             # STOPPING 说明停止信号已发出，无需重复调用 stop()

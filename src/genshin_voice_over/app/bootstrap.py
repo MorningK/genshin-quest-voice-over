@@ -9,18 +9,24 @@ from __future__ import annotations
 import logging
 import sys
 
+from genshin_voice_over.app.file_log import attach_file_logging
+
 logger = logging.getLogger(__name__)
 
 
 def setup_logging(verbose: bool = False) -> None:
-    """配置控制台日志输出。
+    """配置控制台日志输出，并在 verbose 下额外启用日志文件落盘。
 
     无控制台（PyInstaller ``--windowed`` 冻结）时 ``sys.stderr`` 为 None，
     此时挂 StreamHandler 会让每条日志写出失败；改用 NullHandler 静默丢弃，
     GUI 日志面板的 Handler 由主窗口挂载后照常接收日志。
 
+    文件日志与控制台相互独立，无控制台时同样落盘——GUI 冻结版正是最需要
+    事后回看日志的场景。落盘失败仅告警，不影响启动。
+
     Args:
-        verbose: 为 True 时输出 debug 级别日志，否则仅输出 info 及以上。
+        verbose: 为 True 时输出 debug 级别日志并写入日志文件，否则仅输出
+            info 及以上且不落盘。
     """
     level = logging.DEBUG if verbose else logging.INFO
     if sys.stderr is None:
@@ -30,14 +36,16 @@ def setup_logging(verbose: bool = False) -> None:
             # force 覆盖可能已存在的根 handler，确保 -v 能稳定生效
             force=True,
         )
-        return
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
-        datefmt="%H:%M:%S",
-        # force 覆盖可能已存在的根 handler，确保 -v 能稳定生效
-        force=True,
-    )
+    else:
+        logging.basicConfig(
+            level=level,
+            format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+            datefmt="%H:%M:%S",
+            # force 覆盖可能已存在的根 handler，确保 -v 能稳定生效
+            force=True,
+        )
+    if verbose:
+        attach_file_logging()
 
 
 # 进程 DPI 感知模式取值（PROCESS_DPI_AWARENESS，shellscalingapi.h）
