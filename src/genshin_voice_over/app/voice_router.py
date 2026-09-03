@@ -27,22 +27,28 @@ from genshin_voice_over.app.voice_map_store import load_voice_map, save_voice_ma
 
 logger = logging.getLogger(__name__)
 
-# 内置精选的 zh-CN 音色池。
+# 内置精选的中文音色池。
 #
 # 本清单于 2026-09 实际拉取 Edge TTS 音色列表校验过：当时整个中文语系只有
 # 14 个音色（zh-CN 标准 6 个、zh-CN 方言 2 个、zh-HK 3 个、zh-TW 3 个），
 # 远少于早期估计；许多曾在文档中出现过的名字（Xiaohan / Xiaomeng / Yunfan 等）
 # 实际并不存在。构造时还会再与运行时 available_voices 取交集，双保险。
 #
-# 这里只收录标准普通话音色：方言音色（liaoning-Xiaobei / shaanxi-Xiaoni）会让
-# NPC 听起来像地方角色，zh-TW / zh-HK 音色口音偏重，均不纳入。若日后需要更大
-# 的音色池，优先追加 zh-TW 的 HsiaoChen / HsiaoYu / YunJhe 三个。
-CURATED_ZH_CN_VOICES: tuple[str, ...] = (
+# 收录范围：zh-CN 标准普通话音色 + zh-TW 台湾国语音色（同为普通话，仅轻微口音，
+# 纳入以扩充池容量并改善性别比例）。刻意排除两类——zh-CN 方言音色
+# （liaoning-Xiaobei / shaanxi-Xiaoni）会让 NPC 听起来像地方角色；zh-HK 音色
+# 是粤语，与普通话不通，无法用于对白朗读。
+CURATED_ZH_VOICES: tuple[str, ...] = (
+    # zh-CN 标准普通话
     "zh-CN-XiaoyiNeural",  # 女 · 活泼
     "zh-CN-YunxiNeural",  # 男 · 明快
     "zh-CN-YunyangNeural",  # 男 · 沉稳
     "zh-CN-YunjianNeural",  # 男 · 浑厚
     "zh-CN-YunxiaNeural",  # 男 · 少年
+    # zh-TW 台湾国语
+    "zh-TW-HsiaoChenNeural",  # 女 · 温和
+    "zh-TW-HsiaoYuNeural",  # 女 · 明亮
+    "zh-TW-YunJheNeural",  # 男 · 沉稳
 )
 
 
@@ -117,7 +123,7 @@ class SpeakerVoiceRouter:
         Returns:
             参与分配的音色列表，顺序与精选池一致。
         """
-        candidates = [v for v in CURATED_ZH_CN_VOICES if v != default_voice]
+        candidates = [v for v in CURATED_ZH_VOICES if v != default_voice]
         if available_voices:
             available = set(available_voices)
             candidates = [v for v in candidates if v in available]
