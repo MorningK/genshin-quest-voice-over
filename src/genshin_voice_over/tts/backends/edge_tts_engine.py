@@ -94,11 +94,13 @@ class EdgeTTSEngine(TextToSpeech):
         logger.info("Edge TTS engine initialized.")
         return True
 
-    def synthesize(self, text: str) -> TTSResult:
+    def synthesize(self, text: str, voice: str | None = None) -> TTSResult:
         """一次性合成文本为 MP3 语音。
 
         Args:
             text: 待合成的文本内容。
+            voice: 本次合成使用的音色标识；None 表示沿用初始化配置中的音色。
+                每次合成都会新建 Communicate 对象，故覆盖音色无需重建引擎。
 
         Returns:
             TTSResult 对象，包含完整的 MP3 音频数据。
@@ -115,7 +117,7 @@ class EdgeTTSEngine(TextToSpeech):
         chunks: list[bytes] = []
 
         async def _run() -> None:
-            communicate = self._build_communicate(text)
+            communicate = self._build_communicate(text, voice)
             async for chunk in communicate.stream():
                 if chunk.get("type") == "audio" and chunk.get("data"):
                     chunks.append(chunk["data"])
@@ -137,7 +139,7 @@ class EdgeTTSEngine(TextToSpeech):
             is_final=True,
         )
 
-    def synthesize_stream(self, text: str) -> Iterator[TTSResult]:
+    def synthesize_stream(self, text: str, voice: str | None = None) -> Iterator[TTSResult]:
         """流式合成文本为语音。
 
         Edge TTS 的流式接口在独立事件循环中运行，边生成边 yield，
@@ -145,6 +147,8 @@ class EdgeTTSEngine(TextToSpeech):
 
         Args:
             text: 待合成的文本内容。
+            voice: 本次合成使用的音色标识；None 表示沿用初始化配置中的音色。
+                每次合成都会新建 Communicate 对象，故覆盖音色无需重建引擎。
 
         Yields:
             TTSResult 对象，每个包含一段音频数据和 is_final 标记。
@@ -163,7 +167,7 @@ class EdgeTTSEngine(TextToSpeech):
 
         def _worker() -> None:
             async def _run() -> None:
-                communicate = self._build_communicate(text)
+                communicate = self._build_communicate(text, voice)
                 async for chunk in communicate.stream():
                     if chunk.get("type") == "audio" and chunk.get("data"):
                         result_queue.put(chunk["data"])
@@ -245,11 +249,12 @@ class EdgeTTSEngine(TextToSpeech):
             is_final=is_final,
         )
 
-    def _build_communicate(self, text: str) -> Any:
+    def _build_communicate(self, text: str, voice: str | None = None) -> Any:
         """根据配置构造 edge_tts.Communicate 对象。
 
         Args:
             text: 待合成的文本。
+            voice: 覆盖配置音色的音色标识；None 表示沿用配置中的音色。
 
         Returns:
             edge_tts.Communicate 实例。
@@ -258,7 +263,7 @@ class EdgeTTSEngine(TextToSpeech):
         assert config is not None
         return self._edge_tts.Communicate(
             text,
-            config.voice,
+            voice or config.voice,
             rate=_multiplier_percent(config.rate),
             volume=_multiplier_percent(config.volume),
         )

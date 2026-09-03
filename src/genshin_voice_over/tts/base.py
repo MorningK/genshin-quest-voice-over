@@ -98,11 +98,13 @@ class TextToSpeech(ABC):
         ...
 
     @abstractmethod
-    def synthesize(self, text: str) -> TTSResult:
+    def synthesize(self, text: str, voice: str | None = None) -> TTSResult:
         """一次性合成文本为语音。
 
         Args:
             text: 待合成的文本内容。
+            voice: 本次合成使用的音色标识；None 表示沿用初始化配置中的音色。
+                供上层按说话人临时覆盖音色，引擎无需因此重新初始化。
 
         Returns:
             TTSResult 对象，包含完整音频数据。
@@ -114,7 +116,7 @@ class TextToSpeech(ABC):
         ...
 
     @abstractmethod
-    def synthesize_stream(self, text: str) -> Iterator[TTSResult]:
+    def synthesize_stream(self, text: str, voice: str | None = None) -> Iterator[TTSResult]:
         """流式合成文本为语音。
 
         适用于需要边合成边播放的低延迟场景。
@@ -122,6 +124,8 @@ class TextToSpeech(ABC):
 
         Args:
             text: 待合成的文本内容。
+            voice: 本次合成使用的音色标识；None 表示沿用初始化配置中的音色。
+                供上层按说话人临时覆盖音色，引擎无需因此重新初始化。
 
         Yields:
             TTSResult 对象，每个包含一段音频数据和 is_final 标记。

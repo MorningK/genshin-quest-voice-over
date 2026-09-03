@@ -15,6 +15,7 @@ import numpy as np
 
 from genshin_voice_over.app.player import MiniAudioPlayer, WinsoundPlayer
 from genshin_voice_over.app.textproc import TextTracker
+from genshin_voice_over.app.voice_router import SpeakerVoiceRouter
 from genshin_voice_over.recognition.preprocess import crop_dialogue_band
 
 if TYPE_CHECKING:
@@ -177,6 +178,8 @@ class VoiceOverApp:
         self._tts: TextToSpeech | None = None
         self._player: AudioPlayer | None = None
         self._tracker = TextTracker()
+        # 按说话人分配音色的路由器；需等 TTS 初始化后取其可用音色清单才创建
+        self._voice_router: SpeakerVoiceRouter | None = None
         self._stop_event = threading.Event()
         self._initialized = False
         # 上一次送入比对的对白带降采样副本，用于帧变化门控；None 表示尚无缓存（首帧）
@@ -263,6 +266,15 @@ class VoiceOverApp:
             # ValueError 用于捕获如 vits 缺 model_path 等配置校验错误，优雅退出
             logger.error("Initialization failed: %s", exc)
             return False
+
+        # 音色路由器依赖 TTS 引擎报告的可用音色清单，故须在此之后创建
+        tts = self._tts
+        if tts is not None:
+            self._voice_router = SpeakerVoiceRouter(
+                self._config.voice,
+                tts.available_voices,
+                enabled=self._config.speaker_voice,
+            )
 
         self._initialized = True
         # 输出当前优化工作模式：手动选区时自动停用带裁剪与带级门控，
@@ -391,14 +403,23 @@ class VoiceOverApp:
             logger.debug("No new dialogue, skip.")
             return
 
-        logger.info("New dialogue [%s] speaker=%s: %s", request.kind, request.speaker or "-", request.text)
+        # 按说话人解析音色；无说话人或功能关闭时得到 None，交由引擎沿用配置的默认音色。
+        # 朗读内容始终是 request.text，音色只影响发声。
+        voice = self._voice_router.resolve(request.speaker).voice if self._voice_router is not None else None
+        logger.info(
+            "New dialogue [%s] speaker=%s voice=%s: %s",
+            request.kind,
+            request.speaker or "-",
+            voice or "default",
+            request.text,
+        )
 
         # 优先流式：TTS 与播放器均支持流式时，边合成边播放以降低感知延迟
         if self._tts.supports_streaming and self._player.supports_streaming:
             try:
                 # synthesize_stream 返回惰性迭代器，需在消费首个 chunk 时计时才反映真实合成耗时
                 synth_start = time.perf_counter()
-                chunks = self._tts.synthesize_stream(request.text)
+                chunks = self._tts.synthesize_stream(request.text, voice)
 
                 def _timed_chunks() -> Any:
                     logged = False
@@ -419,7 +440,7 @@ class VoiceOverApp:
 
         # 降级：一次性合成 + 阻塞播放；重置计时，避免包含已失败的流式尝试耗时
         step_start = time.perf_counter()
-        tts_result = self._tts.synthesize(request.text)
+        tts_result = self._tts.synthesize(request.text, voice)
         tts_elapsed = (time.perf_counter() - step_start) * 1000
         logger.debug("TTS result: %s", tts_result)
         logger.debug("Step [tts] took %.1f ms", tts_elapsed)
