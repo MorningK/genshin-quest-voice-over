@@ -45,7 +45,10 @@ def _resolve_asset_path(relative_path: Path) -> Path:
         relative_path: 资源文件相对基准目录的路径。
 
     Returns:
-        资源文件的绝对路径。
+        资源文件的绝对路径（文件本身可能不存在，由调用方决定是否校验）。
+
+    Raises:
+        无：本函数只做路径拼接，不访问文件系统。
     """
     base = Path(str(getattr(sys, "_MEIPASS", ""))) if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
     return base / relative_path
@@ -63,6 +66,12 @@ def _apply_window_icon(root: ctk.CTk) -> None:
 
     Args:
         root: 已创建的根窗口。
+
+    Returns:
+        无。
+
+    Raises:
+        无：图标加载失败抛出的 tk.TclError 已在函数内捕获并记录，不向调用方传播。
     """
     icon_path = _resolve_asset_path(_ICON_RELATIVE_PATH)
     try:
@@ -94,8 +103,10 @@ def main() -> int:
     logger.info("Starting GUI application (theme=%s).", _THEME_PATH.name)
 
     root = ctk.CTk()
-    _apply_window_icon(root)
     MainWindow(root)
+    # 图标必须在窗口构建之后设置：GUI 日志面板的 Handler 由 MainWindow 挂载，
+    # 无控制台（冻结 exe）下此前发出的日志会被 NullHandler 丢弃
+    _apply_window_icon(root)
     root.mainloop()
     logger.info("GUI application exited.")
     return 0
