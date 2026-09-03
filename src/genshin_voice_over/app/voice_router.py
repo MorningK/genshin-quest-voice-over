@@ -13,8 +13,13 @@
   NPC 跨会话保持同一音色；写入失败仅告警，内存映射继续生效。
 - **默认音色不参与分配**：玩家/旁白（无名字标签）用全局默认音色，NPC 不会
   被分到与主角相同的声音。
+- **性别相符优先**：能推断出说话人性别时，只在同性别的音色子池中挑选（见
+  ``speaker_gender``）；推断不出则退回全部音色，行为与不加性别约束时一致。
+  子池耗尽时**留在同性别内接受碰撞**——让两位女角色共用一个女声，也好过
+  给女角色配上男声。
 
-本模块只做策略与状态管理，不做网络 IO；持久化委托给 ``voice_map_store``。
+本模块只做策略与状态管理，不做网络 IO；持久化委托给 ``voice_map_store``，
+性别推断委托给 ``speaker_gender``。
 """
 
 from __future__ import annotations
@@ -23,9 +28,24 @@ import hashlib
 import logging
 from dataclasses import dataclass
 
+from genshin_voice_over.app.speaker_gender import SpeakerGender, infer_gender, load_gender_overrides
 from genshin_voice_over.app.voice_map_store import load_voice_map, save_voice_map
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class CuratedVoice:
+    """内置精选音色条目。
+
+    Attributes:
+        voice: 音色标识。
+        gender: 该音色的性别，用于为说话人挑选性别相符的音色。
+    """
+
+    voice: str
+    gender: SpeakerGender
+
 
 # 内置精选的中文音色池。
 #
@@ -38,17 +58,17 @@ logger = logging.getLogger(__name__)
 # 纳入以扩充池容量并改善性别比例）。刻意排除两类——zh-CN 方言音色
 # （liaoning-Xiaobei / shaanxi-Xiaoni）会让 NPC 听起来像地方角色；zh-HK 音色
 # 是粤语，与普通话不通，无法用于对白朗读。
-CURATED_ZH_VOICES: tuple[str, ...] = (
+CURATED_ZH_VOICES: tuple[CuratedVoice, ...] = (
     # zh-CN 标准普通话
-    "zh-CN-XiaoyiNeural",  # 女 · 活泼
-    "zh-CN-YunxiNeural",  # 男 · 明快
-    "zh-CN-YunyangNeural",  # 男 · 沉稳
-    "zh-CN-YunjianNeural",  # 男 · 浑厚
-    "zh-CN-YunxiaNeural",  # 男 · 少年
+    CuratedVoice("zh-CN-XiaoyiNeural", SpeakerGender.FEMALE),  # 活泼
+    CuratedVoice("zh-CN-YunxiNeural", SpeakerGender.MALE),  # 明快
+    CuratedVoice("zh-CN-YunyangNeural", SpeakerGender.MALE),  # 沉稳
+    CuratedVoice("zh-CN-YunjianNeural", SpeakerGender.MALE),  # 浑厚
+    CuratedVoice("zh-CN-YunxiaNeural", SpeakerGender.MALE),  # 少年
     # zh-TW 台湾国语
-    "zh-TW-HsiaoChenNeural",  # 女 · 温和
-    "zh-TW-HsiaoYuNeural",  # 女 · 明亮
-    "zh-TW-YunJheNeural",  # 男 · 沉稳
+    CuratedVoice("zh-TW-HsiaoChenNeural", SpeakerGender.FEMALE),  # 温和
+    CuratedVoice("zh-TW-HsiaoYuNeural", SpeakerGender.FEMALE),  # 明亮
+    CuratedVoice("zh-TW-YunJheNeural", SpeakerGender.MALE),  # 沉稳
 )
 
 
@@ -94,14 +114,17 @@ class SpeakerVoiceRouter:
         self._default_voice = default_voice
         self._enabled = enabled
         self._pool = self._build_pool(default_voice, available_voices)
+        self._genders = {entry.voice: entry.gender for entry in CURATED_ZH_VOICES}
+        self._gender_overrides = load_gender_overrides()
         self._mapping: dict[str, str] = load_voice_map() or {}
         self._drop_stale_entries()
         logger.info(
-            "Speaker voice router ready: enabled=%s, default=%s, pool_size=%d, known_speakers=%d",
+            "Speaker voice router ready: enabled=%s, default=%s, pool_size=%d, known_speakers=%d, gender_overrides=%d",
             enabled,
             default_voice,
             len(self._pool),
             len(self._mapping),
+            len(self._gender_overrides),
         )
 
     @property
@@ -123,7 +146,7 @@ class SpeakerVoiceRouter:
         Returns:
             参与分配的音色列表，顺序与精选池一致。
         """
-        candidates = [v for v in CURATED_ZH_VOICES if v != default_voice]
+        candidates = [entry.voice for entry in CURATED_ZH_VOICES if entry.voice != default_voice]
         if available_voices:
             available = set(available_voices)
             candidates = [v for v in candidates if v in available]
@@ -181,27 +204,52 @@ class SpeakerVoiceRouter:
         if cached is not None:
             return VoiceAssignment(voice=cached)
 
-        voice = self._assign(speaker)
+        gender = infer_gender(speaker, self._gender_overrides)
+        voice = self._assign(speaker, gender)
         self._mapping[speaker] = voice
         if not save_voice_map(self._mapping):
             logger.debug("Voice map persistence unavailable; assignment kept in memory only.")
-        logger.info("Assigned voice %s to speaker %s", voice, speaker)
+        logger.info(
+            "Assigned voice %s to speaker %s (gender=%s)",
+            voice,
+            speaker,
+            gender.value if gender is not None else "unknown",
+        )
         return VoiceAssignment(voice=voice, assigned_new=True)
 
-    def _assign(self, speaker: str) -> str:
+    def _pool_for(self, gender: SpeakerGender | None) -> list[str]:
+        """取得某性别可用的音色子池。
+
+        Args:
+            gender: 目标性别；None 表示不限制性别。
+
+        Returns:
+            音色列表；同性别子池为空时退回全部音色，避免无从分配。
+        """
+        if gender is None:
+            return self._pool
+        subset = [voice for voice in self._pool if self._genders.get(voice) is gender]
+        return subset or self._pool
+
+    def _assign(self, speaker: str, gender: SpeakerGender | None) -> str:
         """为说话人挑选音色，优先取哈希位，被占用则在池中循环顺延。
+
+        已知性别时**只在同性别子池内**挑选：子池耗尽也留在池内接受碰撞，不跨
+        到另一性别——同性共享一个声音，听感上远好过性别错配。
 
         Args:
             speaker: 说话人名字。
+            gender: 推断出的性别；None 表示不限制。
 
         Returns:
             选中的音色；池中音色全部占用时回到哈希位接受碰撞。
         """
-        size = len(self._pool)
+        candidates = self._pool_for(gender)
+        size = len(candidates)
         start = self._stable_index(speaker, size)
-        used = {voice for voice in self._mapping.values() if voice in set(self._pool)}
+        used = {voice for voice in self._mapping.values() if voice in set(candidates)}
         for offset in range(size):
-            candidate = self._pool[(start + offset) % size]
+            candidate = candidates[(start + offset) % size]
             if candidate not in used:
                 return candidate
-        return self._pool[start]
+        return candidates[start]
