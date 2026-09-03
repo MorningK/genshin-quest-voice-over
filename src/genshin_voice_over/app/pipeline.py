@@ -377,19 +377,21 @@ class VoiceOverApp:
         # 仅在识别成功后提交缓存；识别抛出异常时保持未更新，相同帧可再次尝试识别
         self._last_frame = candidate_frame
 
-        # 优先使用聚焦后的对白带文本（已剔除右侧选项菜单/性能数据等 UI 噪声），
-        # 为空时回退到全帧文本，保证无 ROI 预处理时行为不变
+        # 优先使用聚焦后的对白正文（已剔除右侧选项菜单/性能数据等 UI 噪声，且不含
+        # 说话人名字与头衔——后两者已在识别阶段分离到 recognition.speaker /
+        # speaker_title），为空时回退到全帧文本，保证无 ROI 预处理时行为不变
         dialogue_text = recognition.roi_text or recognition.text
 
         step_start = time.perf_counter()
-        request = self._tracker.should_play(dialogue_text)
+        # 说话人只旁路传递：朗读内容始终是 request.text，speaker 不进入 TTS
+        request = self._tracker.should_play(dialogue_text, recognition.speaker)
         track_elapsed = (time.perf_counter() - step_start) * 1000
         logger.debug("Step [track] took %.1f ms", track_elapsed)
         if request is None:
             logger.debug("No new dialogue, skip.")
             return
 
-        logger.info("New dialogue [%s]: %s", request.kind, request.text)
+        logger.info("New dialogue [%s] speaker=%s: %s", request.kind, request.speaker or "-", request.text)
 
         # 优先流式：TTS 与播放器均支持流式时，边合成边播放以降低感知延迟
         if self._tts.supports_streaming and self._player.supports_streaming:

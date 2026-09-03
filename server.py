@@ -4,7 +4,8 @@
 对外提供 SSE 流式接口，接收上传图片与可选参数，返回识别文本与边合成边下发的 MP3 语音分片。
 
 处理流程（对齐 `src/genshin_voice_over/app/pipeline.py`）：
-    解码图片 → OCR recognize → 取 roi_text or text → 文本清洗 → 流式 TTS 合成 → SSE 下发
+    解码图片 → OCR recognize（分离对白正文与说话人）→ 取 roi_text or text
+    → 文本清洗 → 流式 TTS 合成 → SSE 下发（说话人随 text 事件旁路返回，不参与合成）
 
 运行方式：
     本地：uv run uvicorn server:app --host 0.0.0.0 --port 8000
@@ -301,7 +302,7 @@ async def voice(
     """SSE 流式接口：对上传图片做 OCR 识别并流式返回 TTS 语音。
 
     事件序列：
-        event: text    识别结果（text / roi_text / confidence / language）
+        event: text    识别结果（text / roi_text / speaker / speaker_title / confidence / language）
         event: audio   音频分片（data 为 base64 编码的 MP3 字节，is_final 标记结尾）
         event: done    合成完成
         event: error   处理出错
@@ -447,6 +448,8 @@ def _run_worker(
                 {
                     "text": cleaned,
                     "roi_text": recognition.roi_text,
+                    "speaker": recognition.speaker,
+                    "speaker_title": recognition.speaker_title,
                     "confidence": recognition.confidence,
                     "language": recognition.language_detected,
                 },

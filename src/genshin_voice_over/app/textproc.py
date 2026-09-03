@@ -118,10 +118,13 @@ class PlayRequest:
     Attributes:
         text: 待合成/播放的文本。kind="full" 时为完整新文本；kind="delta" 时为新增的后缀增量。
         kind: 播放类型，"full" 表示完整播放，"delta" 表示仅播放增量后缀。
+        speaker: 说话人名字，由 OCR 从画面中提取，未识别到时为空串。仅作旁路信息
+            （运行日志、对外接口），**不参与合成**——朗读内容始终是 text。
     """
 
     text: str
     kind: str
+    speaker: str = ""
 
 
 class TextTracker:
@@ -131,10 +134,33 @@ class TextTracker:
     """
 
     def __init__(self) -> None:
-        """初始化跟踪器，已播放的累积文本为空。"""
+        """初始化跟踪器，已播放的累积文本与已记录的说话人均为空。"""
         self._last_text: str = ""
+        self._last_speaker: str = ""
 
-    def should_play(self, raw_text: str) -> PlayRequest | None:
+    def _resolve_speaker(self, speaker: str, *, same_sentence: bool) -> str:
+        """确定本次请求应携带的说话人，并同步跟踪器内部状态。
+
+        采用「同句内延续」策略：判定为同一句且本帧未识别出说话人时，沿用上一个
+        非空说话人，避免 OCR 单帧漏检造成句中说话人变空；判定为全新句时一律取
+        本帧值（可为空），避免上一句 NPC 的名字被错误延续到下一句。
+
+        Args:
+            speaker: 本帧识别出的说话人，未识别到时为空串。
+            same_sentence: 本帧文本是否被判定为与累积文本属于同一句。
+
+        Returns:
+            本次请求应携带的说话人；未识别到且非同句延续时为空串。
+        """
+        if speaker:
+            self._last_speaker = speaker
+            return speaker
+        if same_sentence:
+            return self._last_speaker
+        self._last_speaker = ""
+        return ""
+
+    def should_play(self, raw_text: str, speaker: str = "") -> PlayRequest | None:
         """判断给定原始文本是否应当播放，并给出播放目标。
 
         依次执行清洗、噪音过滤与变化检测：
@@ -144,8 +170,11 @@ class TextTracker:
         - 与累积文本高度相似（相似度不低于阈值，如 OCR 帧间轻微抖动）则视为同一句，更新累积文本并返回 None；
         - 其余情况返回完整文本的 full 请求。
 
+        说话人按 :meth:`_resolve_speaker` 的「同句内延续」策略确定。
+
         Args:
             raw_text: OCR 输出的原始文本。
+            speaker: 本帧识别出的说话人，未识别到时为空串。
 
         Returns:
             需要播放的 PlayRequest；无需播放时返回 None。
@@ -159,6 +188,8 @@ class TextTracker:
             return None
 
         if cleaned == self._last_text:
+            # 文本未变化仍属同一句：同步说话人状态，避免下一帧沿用过期值
+            self._resolve_speaker(speaker, same_sentence=True)
             return None
 
         # 首帧时 _last_text 为空字符串，startswith("") 恒为 True；
@@ -169,7 +200,7 @@ class TextTracker:
                 # 增量部分为空或仅为符号/空白，无需补播
                 return None
             self._last_text = cleaned
-            return PlayRequest(text=delta, kind="delta")
+            return PlayRequest(text=delta, kind="delta", speaker=self._resolve_speaker(speaker, same_sentence=True))
 
         # 与上一句高度相似（仅 OCR 帧间轻微抖动导致个别字漏识/多字/空格），视为同一句对话，不触发播放；
         # 比对前去掉首尾标点/空白，避免句末「？」「。」抖动造成整句重播
@@ -184,11 +215,13 @@ class TextTracker:
             # 前缀判断失败，从而把已朗读过的部分连同新文字一起整句重播。
             # 存 cleaned（而非去标点后的值），与上面两个分支的口径保持一致。
             self._last_text = cleaned
+            self._resolve_speaker(speaker, same_sentence=True)
             return None
 
         self._last_text = cleaned
-        return PlayRequest(text=cleaned, kind="full")
+        return PlayRequest(text=cleaned, kind="full", speaker=self._resolve_speaker(speaker, same_sentence=False))
 
     def reset(self) -> None:
-        """清空已播放的累积文本状态，用于重新开始跟踪。"""
+        """清空已播放的累积文本与已记录的说话人，用于重新开始跟踪。"""
         self._last_text = ""
+        self._last_speaker = ""
