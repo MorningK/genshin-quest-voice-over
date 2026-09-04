@@ -650,9 +650,9 @@ cy_full = top_ratio + cy_viewport × height_ratio
 
 ---
 
-## 11. 第二轮：48 张样张语料扩充与回退语义修复
+## 11. 第二轮：38 张样张的语料扩充与回退语义修复
 
-本章记录把语料从 4 张扩充到 48 张后暴露的新问题，以及与第 5 章并列的新增实现。
+本章记录把语料从 4 张扩充到 38 张后暴露的新问题，以及与第 5 章并列的新增实现。
 沿用 1.2 节的方法（复刻生产链路 → 取框 → 逐框取色 → 与人工标注比对），
 全部数值均为脚本实测。
 
@@ -713,8 +713,39 @@ dialogue_text = recognition.roi_text or recognition.text
 | `gated=True` 且 `roi_text` 为空 | **返回空串，抑制朗读**（门控的权威结论） |
 | `gated=False`（缺 OpenCV / 输入非 ndarray） | 沿用旧的 `roi_text or 全帧 text` 兜底 |
 
-置位点即两个后端既有的 `if applied and isinstance(enhanced, np.ndarray):` 分支，
-**零额外计算**。降级路径行为与改动前完全一致（已用 5 条语义用例验证）。
+置位点即两个后端既有的 `if applied and isinstance(enhanced, np.ndarray):` 分支
+（该分支决定「是否做了分类」），**零额外计算**。降级路径行为与改动前完全一致
+（已用 5 条语义用例验证）。
+
+**`dialogue_gated` 的取值条件必须与 `visuals` 一致。** 分支内真正决定权威性的
+是能否取色，即 `isinstance(image, _np.ndarray)`：
+
+- ndarray 输入 → `visuals` 可计算 → 走 `_classify_with_visuals` → `gated=True`；
+- bytes 输入且 OpenCV 可用 → `downscale_to_max_side` 会把它解码成 ndarray，
+  表面上满足了 `applied` 与 `enhanced` 两个条件，但 `visuals` 仍是 `None`，
+  走的是 `_classify_without_visuals` 几何降级分类。此时空 `roi_text` **不是**
+  权威结论，置 `gated=False` 才能保住全帧文本兜底。
+
+若误按 `applied` 置位，bytes 输入的界面截图会被静默抑制（听不到任何内容）。
+生产上 `server.py` 的 `_decode_image()` 恒产出 ndarray，故不会触发；属契约层面
+必须对齐的潜在问题。
+
+**门控权威判定「无对白」时必须清空 `TextTracker`。** `should_play()` 在
+`clean_text` 为空时直接 `return None`，**不更新 `_last_text`**。改动前无对白的帧
+会回退到全帧噪声文本、把累积文本覆盖成噪声，这个缺陷被掩盖；改成抑制后累积
+文本会长期留着上一句，进而导致两类漏读：
+
+| 场景 | 后果 |
+|---|---|
+| NPC 重复同一句（如「再见。」） | 命中「文本未变化」分支 → 静默跳过，**整句丢失** |
+| 新句以前句为前缀 | 命中前缀增量分支 → 只读出后半截增量 |
+
+因此在 `gated=True` 且候选为空时调用 `tracker.reset()`。代价是打字机过程中若某帧
+OCR 瞬断，下一帧会整句重读；**漏读比重复严重**（沉默无法被用户察觉，重复至少能
+听全），且帧门控已保证文本稳定期间不触发 OCR，瞬断概率低。故不引入「连续 N 帧
+无对白才重置」的计数器，避免给 `pipeline.py` 增加跨帧状态。
+
+Web 端无需此处理：`server.py` 每次请求是一问一答，不持有跨请求的 `TextTracker`。
 
 副作用是热路径开销略降：探索中大世界画面在门控处即终止，省去后续的
 `clean_text` / `is_noise` / 相似度比对。原先静默的「门控判无对白但画面有文本」

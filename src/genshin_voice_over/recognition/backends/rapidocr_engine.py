@@ -221,7 +221,11 @@ class RapidOCREngine(TextRecognizer):
         dialogue_gated = False
         # _np 为方法开头的运行时惰性导入（文件头 np 仅类型检查可见）
         if applied and isinstance(enhanced, _np.ndarray):
-            dialogue_gated = True
+            # 与下方 visuals 的取值条件保持一致：只有能在原始帧上取色才是权威判定。
+            # bytes 输入会被 downscale_to_max_side 解码成 ndarray，看起来满足了
+            # applied 与 enhanced 两个条件，但 visuals 仍为 None（几何降级分类），
+            # 此时空的 roi_text 不能当作「没有对白」的权威结论，必须保留全帧兜底。
+            dialogue_gated = isinstance(image, _np.ndarray)
             image_shape = enhanced.shape[:2]
             # 颜色取样必须用原始 BGR 帧：preprocess_frame 已把 OCR 输入转为灰度并做
             # CLAHE，颜色在进入识别前即丢失。输入非 numpy 时无从映射坐标，跳过取色。

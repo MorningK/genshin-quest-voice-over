@@ -395,7 +395,16 @@ class VoiceOverApp:
         # 必须抑制而不回退全帧文本，否则菜单文本会被当对白朗读出来；
         # 门控未运行（缺 OpenCV / 非 ndarray 输入）时才沿用全帧文本兜底。
         dialogue_text = resolve_dialogue_text(recognition.roi_text, recognition.text, recognition.dialogue_gated)
-        if not dialogue_text and recognition.text:
+        if recognition.dialogue_gated and not dialogue_text:
+            # 门控权威判定本帧无对白时必须清空累积文本：should_play("") 会直接返回
+            # 而不更新 _last_text，累积文本会一直留着上一句。不清空的话，NPC 重复
+            # 同一句会命中「文本未变化」而被静默跳过，新句若以前句为前缀则只会
+            # 读出增量后缀——两者都是用户听不到的漏读。
+            # 代价是打字机过程中若某帧 OCR 瞬断，下一帧会整句重读；漏读比重复严重，
+            # 且帧门控已保证文本稳定期间不触发 OCR，瞬断概率低。
+            self._tracker.reset()
+            logger.debug("Dialogue gate found no dialogue; text tracker state cleared.")
+        elif not dialogue_text and recognition.text:
             logger.debug(
                 "Dialogue gate found no dialogue while %d text boxes exist; speech suppressed.",
                 len(recognition.boxes),

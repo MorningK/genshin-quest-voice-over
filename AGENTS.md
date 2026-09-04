@@ -70,6 +70,8 @@ CI 有两个工作流：发布 Release 时分别构建 Windows exe（`.github/wo
 
 **朗读候选文本的解析统一走 `app/textproc.py:resolve_dialogue_text(roi_text, full_text, gated)`，两端都不得再直接写 `roi_text or text`。** 语义由 `RecognitionResult.dialogue_gated` 决定：门控运行过（`gated=True`）时 `roi_text` 为空是**权威结论**，代表「画面中没有对白」，必须返回空串抑制朗读；只有门控未运行（缺 OpenCV 或输入非 ndarray 而无法取色）时才回退全帧 `text` 兜底。此前两端都是无条件 `roi_text or text`，导致门控判「无对白」后立刻被全帧文本架空，菜单截图里的物品名、面板标签、UID 照旧被朗读出来。
 
+配套的两条不变式：① `dialogue_gated` 的取值条件必须与能否取色一致（即 `isinstance(image, np.ndarray)`），不能只看 `applied`——bytes 输入会被解码成 ndarray 而满足 `applied`，但取色仍为 `None`，属几何降级分类，此时不得置为权威；② 门控权威判定无对白时，`pipeline.py` 必须调用 `TextTracker.reset()`，因为 `should_play("")` 直接返回而不更新 `_last_text`，不清空会让重复句被静默跳过、前缀句只读出增量后缀。
+
 ### 后端抽象模式（关键设计）
 
 每个引擎域遵循相同结构：`base.py` 定义 ABC 抽象基类与数据类配置，`backends/` 存放具体实现：

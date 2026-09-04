@@ -149,6 +149,10 @@ def prepare_image(image: np.ndarray, options: CompressOptions) -> np.ndarray:
     Alpha 通道对截图无信息量（恒为不透明），却显著抬高 PNG 体积；剥离后
     RGB 像素完全不变，是无损压缩收益的主要来源。
 
+    剥离分两种情况：PNG 支持 alpha，故仅在**恒为不透明**时才剥离，以维持
+    默认档「RGB 像素逐字节不变」的无损标称；jpg / webp 不支持 alpha，
+    一律剥离（这两档本就有损，不做无损承诺）。
+
     Args:
         image: 原始图像，BGR 或 BGRA。
         options: 压缩参数。
@@ -157,7 +161,9 @@ def prepare_image(image: np.ndarray, options: CompressOptions) -> np.ndarray:
         BGR 图像，已按需缩放。
     """
     if image.ndim == 3 and image.shape[2] == 4:
-        image = cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
+        opaque = bool(np.all(image[:, :, 3] == 255))
+        if opaque or options.image_format != "png":
+            image = cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
     if options.max_side > 0:
         height, width = image.shape[:2]
         long_side = max(height, width)
@@ -198,9 +204,10 @@ def _output_path(path: Path, options: CompressOptions) -> Path:
         options: 压缩参数。
 
     Returns:
-        输出路径；格式不变时与原路径相同。
+        输出路径；仅当源扩展名已与目标格式一致时复用原路径，
+        否则派生为目标扩展名（含其他格式转 PNG 的情形）。
     """
-    if options.image_format == "png":
+    if path.suffix.lower() == f".{options.image_format}":
         return path
     return path.with_suffix(f".{options.image_format}")
 
@@ -241,6 +248,10 @@ def compress_all(paths: list[Path], options: CompressOptions, root: Path) -> lis
             shutil.copy2(path, destination)
 
         output = _output_path(path, options)
+        # 转换格式时若目标已存在，直接写会静默毁掉一个用户文件；语料多为未跟踪
+        # 文件且本脚本原地重写，宁可失败让用户显式决策，也不要静默覆盖。
+        if output != path and output.exists():
+            raise RuntimeError(f"Output path already exists, refusing to overwrite: {output}")
         output.write_bytes(encoded)
         # 格式变更时旧文件成了孤儿，一并删除，否则体积不降反升
         if output != path:
@@ -293,7 +304,7 @@ def main(argv: list[str] | None = None) -> int:
         argv: 参数列表；None 时取 sys.argv[1:]。
 
     Returns:
-        退出码，0 表示成功。
+        退出码，0 表示成功；未找到图片、或全部图片都无法解码时为 1。
     """
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     args = parse_args(argv)
@@ -309,7 +320,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"No images found under {args.dir}")
         return 1
     root = args.dir if args.dir.is_dir() else args.dir.parent
-    report(compress_all(paths, options, root), options)
+    stats = compress_all(paths, options, root)
+    # 全部图片都无法解码时 stats 为空，report() 里的前后体积比值会除零
+    if not stats:
+        print(f"All {len(paths)} image(s) under {args.dir} were skipped; nothing was compressed.")
+        return 1
+    report(stats, options)
     return 0
 
 
