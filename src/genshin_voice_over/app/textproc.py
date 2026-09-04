@@ -91,6 +91,29 @@ def _strip_punct(text: str) -> str:
     return _LEADING_PUNCT_RE.sub("", _TRAILING_PUNCT_RE.sub("", text)).strip()
 
 
+def resolve_dialogue_text(roi_text: str, full_text: str, gated: bool) -> str:
+    """解析本帧供朗读消费的候选文本。
+
+    门控给出过权威判定（``gated`` 为 True）时，``roi_text`` 为空意味着「画面里
+    确实没有对白」，必须原样返回空串而**不得**回退到全帧 ``text``：否则门控的
+    结论被架空，菜单截图里的物品名、面板标签、UID 会绕过门控被朗读出来。
+
+    门控未运行（缺 OpenCV 或输入非 numpy 数组而无法取色）时沿用旧的回退语义，
+    保证降级路径与改动前完全一致。
+
+    Args:
+        roi_text: 门控聚焦后的对白正文，可能为空串。
+        full_text: 全帧 OCR 文本，仅在门控未运行时作为兜底。
+        gated: 门控是否对本帧给出过权威判定。
+
+    Returns:
+        待送入 :class:`TextTracker` 的候选文本；门控判定无对白时返回空串。
+    """
+    if roi_text:
+        return roi_text
+    return "" if gated else full_text
+
+
 def filter_ui_noise(text: str) -> str | None:
     """过滤单条游戏 UI 噪声文本。
 

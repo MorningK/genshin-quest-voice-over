@@ -1,6 +1,6 @@
 [project]
 name = "genshin-quest-voice-over"
-version = "0.2.0"
+version = "0.2.1"
 description = "Real-time voice-over for unvoiced Genshin Impact quests: screen capture → OCR → TTS"
 readme = "README.md"
 requires-python = ">=3.12"

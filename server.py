@@ -4,8 +4,9 @@
 对外提供 SSE 流式接口，接收上传图片与可选参数，返回识别文本与边合成边下发的 MP3 语音分片。
 
 处理流程（对齐 `src/genshin_voice_over/app/pipeline.py`）：
-    解码图片 → OCR recognize（分离对白正文与说话人）→ 取 roi_text or text
-    → 文本清洗 → 流式 TTS 合成 → SSE 下发（说话人随 text 事件旁路返回，不参与合成）
+    解码图片 → OCR recognize（分离对白正文与说话人）→ resolve_dialogue_text
+    （门控判无对白时抑制，不回退全帧文本）→ 文本清洗 → 流式 TTS 合成
+    → SSE 下发（说话人随 text 事件旁路返回，不参与合成）
 
 运行方式：
     本地：uv run uvicorn server:app --host 0.0.0.0 --port 8000
@@ -37,7 +38,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingRes
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
 from genshin_voice_over.app.config import AppConfig  # noqa: E402
-from genshin_voice_over.app.textproc import clean_text, is_noise  # noqa: E402
+from genshin_voice_over.app.textproc import clean_text, is_noise, resolve_dialogue_text  # noqa: E402
 from genshin_voice_over.app.voice_router import SpeakerVoiceRouter  # noqa: E402
 from genshin_voice_over.tts.base import TextToSpeech, TTSConfig  # noqa: E402
 
@@ -207,7 +208,7 @@ app = FastAPI(
     title="Genshin Quest Voice Over API",
     description="图片 OCR 识别 + 流式 TTS 语音合成服务",
     # 与 pyproject.toml 的 [project].version 保持一致
-    version="0.2.0",
+    version="0.2.1",
     lifespan=_lifespan,
 )
 
@@ -431,7 +432,9 @@ def _run_worker(
         recognizer = _get_engine("ocr", request.ocr_backend, config)
         image = _decode_image(request.image_bytes)
         recognition = recognizer.recognize(image)
-        dialogue_text = recognition.roi_text or recognition.text
+        # 与桌面端 pipeline 保持同一口径：门控给出过判定时，roi_text 为空即代表
+        # 「图中没有对白」，抑制而非回退全帧文本，避免菜单文本被当对白朗读出来
+        dialogue_text = resolve_dialogue_text(recognition.roi_text, recognition.text, recognition.dialogue_gated)
         cleaned = clean_text(dialogue_text)
 
         if not cleaned or is_noise(cleaned):
