@@ -39,8 +39,9 @@ from genshin_voice_over.app.textproc import TextTracker, resolve_dialogue_text  
 from genshin_voice_over.recognition.backends.rapidocr_engine import RapidOCREngine  # noqa: E402
 from genshin_voice_over.recognition.base import RecognitionConfig  # noqa: E402
 
-# ground truth 来自 docs/dialogue-region-discrimination.md 2.2 节的人工标注，
-# 以及第 11.1 节新增的 IMG_3431（超宽屏样张）。
+# ground truth 来自 docs/dialogue-region-discrimination.md 2.2 节的人工标注、
+# 第 11.1 节新增的 IMG_3431（超宽屏样张），以及第 12.1 节新增的 10 张 16:9 样张。
+# 两行对白按阅读顺序直接拼接，与生产链路 roi_text 的拼接口径一致。
 DIALOG_TRUTH: dict[str, str] = {
     "Genshin Impact 2026_7_1 21_47_37.png": "欢迎来到冒险家协会，「木偶」大人。有什么我能为您做的吗？",
     "Genshin Impact 2026_8_15 10_14_43.png": (
@@ -49,6 +50,21 @@ DIALOG_TRUTH: dict[str, str] = {
     "Genshin Impact 2026_8_15 10_17_02.png": "奥黛塔和罗莎琳性格很不一样，给她一段时间吧，我觉得她会自己调整过来的。",
     "原神 2026_8_15 14_53_24.png": "嗯，我想…这里应该是",
     "IMG_3431.PNG": "感谢你完成了今天的委托，这是给你的奖励。",
+    # 以下 10 张为第 12.1 节扩充的至冬国主线样张（含派蒙、凯瑟琳、塔佩兹尼科夫等多个说话人）
+    "Genshin Impact 2026_8_23 22_24_17.png": "嘿嘿，如果有一天，你要和整个世界为敌了，我也一定会像那样站在你这边的。",
+    "Genshin Impact 2026_8_26 22_32_12.png": "喂，那边那个黄毛！别再往前走了！这里闲人莫入！",
+    "Genshin Impact 2026_9_5 23_15_51.png": "嗯…让我们看看桌上的东西…",
+    "Genshin Impact 2026_9_5 23_16_26.png": "向着星辰与深渊！欢迎来到冒险家协会总部。",
+    "Genshin Impact 2026_9_5 23_16_56.png": "对各位冒险家来说，至冬幅员辽阔，想必是个能够大展拳脚的好地方…",
+    "Genshin Impact 2026_9_5 23_28_46.png": "嗯…距离炉子这么近，甚至还有点变热了…",
+    "Genshin Impact 2026_9_5 23_29_17.png": "白沙皇在位期间，到底从影域中挖掘出了多少科技造物？",
+    "Genshin Impact 2026_9_5 23_29_28.png": (
+        "另外，从影域中收集到的资源可以被用来升级它的权限等级。很显然，要想解锁更多的用途，就需要获得更高的权限。"
+    ),
+    "Genshin Impact 2026_9_5 23_30_02.png": (
+        "这座遗迹内的古代造物已经被发掘完毕了，真是辛苦「杜麦尼」了，我收集到了不少一手的研究资料。"
+    ),
+    "Genshin Impact 2026_9_5 23_30_21.png": "有机会的话，跟我去打猎吧，我的枪法全是在野外学到的。",
 }
 
 # 归一化只保留中日韩文字与英数字，用于容忍 OCR 的标点与空格抖动
