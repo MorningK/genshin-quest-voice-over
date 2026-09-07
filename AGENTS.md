@@ -35,10 +35,11 @@ uv run pyrefly check
 # 对话门控回归：验证 examples 语料判定结果（dialog 应出对白、others 不应出声）
 # 改动门控阈值 / 文本过滤规则 / 样张后都必须重跑，详见 docs/dialogue-region-discrimination.md 第 11 章
 # 语料按输入路径分组：full-frame/ 是全帧样张，crop-band/ 是从中裁出的对话面板（第 13 章）
-# 裁带模式要求 crop-band/ 与 full-frame/ 文件齐平，否则脚本报错退出（防回归假通过）
-uv run python scripts/verify_examples.py                # 全帧路径（判定口径，读 full-frame/）
-uv run python scripts/verify_examples.py --crop-band    # 裁带路径（读 crop-band/，回归确认）
-uv run python scripts/verify_examples.py --verbose      # 打印逐张明细
+# 裁带模式要求 crop-band/ 与 full-frame/ 文件齐平，否则收集用例阶段即报错（防回归假通过）
+uv run pytest                                # 全部用例（两种模式 × 全部样张）
+uv run pytest -v                             # 打印逐张明细（用例名形如 crop-band-dialog/IMG_3431.PNG）
+uv run pytest -k crop-band                   # 只跑裁带路径
+uv run pytest -k "full-frame and dialog"     # 只跑全帧路径的对白样张
 
 # 拆分语料并裁出对话面板：把类目目录下平铺的样张搬入 full-frame/，
 # 再按门控判出的「说话人 + 对白」框裁出 crop-band/（无对话要素时回退底部对话带）
@@ -62,12 +63,14 @@ uv build
 uv publish --token <pypi-token>
 ```
 
-本仓库**没有测试套件**；验证方式为运行程序 + ruff/pyrefly 静态检查 + 打包产物体检，
-外加 `examples/` 语料的门控回归（`scripts/verify_examples.py`，是判定类改动的主要防线）。
+本仓库**没有单元测试**，回归以 `tests/` 下的 pytest 用例为准：每张语料样张在
+`full-frame/` 与 `crop-band/` 两条判定路径上各成一条用例，失败可定位到具体样张与模式。
+外加运行程序 + ruff/pyrefly 静态检查 + 打包产物体检。
 语料按输入路径分为 `examples/<kind>/full-frame/`（全帧样张）与 `examples/<kind>/crop-band/`
 （裁出的对话面板，由 `scripts/split_examples.py` 生成），两组文件名一一对应，
-故 `DIALOG_TRUTH` 按文件名登记的标注可在两条判定路径上复用。
-CI 有两个工作流：发布 Release 时分别构建 Windows exe（`.github/workflows/release-desktop.yml`）
+故 `DIALOG_TRUTH`（登记在 `tests/example_corpus.py`）按文件名登记的标注可在两条判定路径上复用。
+CI 有三个工作流：PR 与 main 推送时跑 pytest + ruff + pyrefly（`.github/workflows/ci.yml`），
+发布 Release 时分别构建 Windows exe（`.github/workflows/release-desktop.yml`）
 与上传 PyPI（`.github/workflows/publish-pypi.yml`）。
 
 ## 架构

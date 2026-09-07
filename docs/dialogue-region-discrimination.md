@@ -858,7 +858,7 @@ preprocess` 完整三段、`ImageTransform` 分子取降采样前的 `ocr_input`
 `crop-band/` 两组子图，数量与文件名不变。）
 
 判定口径不变：`crop_dialogue_band=False`（全帧 / Web 路径）。10 条新增 ground
-truth 已登记进 `scripts/verify_examples.py` 的 `DIALOG_TRUTH`（两行对白按阅读
+truth 已登记进 `tests/example_corpus.py` 的 `DIALOG_TRUTH`（两行对白按阅读
 顺序拼接，与生产 `roi_text` 口径一致）。
 
 ### 12.2 基线结果
@@ -950,7 +950,7 @@ examples/<kind>/
 ### 13.2 裁图口径
 
 裁图由 `scripts/split_examples.py` 生成，文件名与全帧图**保持一致**，故
-`scripts/verify_examples.py` 的 `DIALOG_TRUTH` 按文件名命中，标注无需改写即可
+`tests/example_corpus.py` 的 `DIALOG_TRUTH` 按文件名命中，标注无需改写即可
 在两条路径上复用。
 
 定位方式不是固定比例，而是复用生产链路的门控结论：
@@ -1006,12 +1006,14 @@ examples/<kind>/
 ```bash
 uv run python scripts/split_examples.py --dry-run    # 预演：只出报告，不搬移不写图
 uv run python scripts/split_examples.py              # 搬入 full-frame/ 并生成 crop-band/
-uv run python scripts/verify_examples.py             # 全帧模式（读 full-frame/）
-uv run python scripts/verify_examples.py --crop-band # 裁带模式（读 crop-band/）
+uv run pytest                                        # 全部用例：两种模式 × 全部样张
+uv run pytest -k crop-band                           # 只跑裁带模式（读 crop-band/）
+uv run pytest -v                                     # 逐张明细，用例名含模式与文件名
 ```
 
 脚本幂等：已拆分的语料上重跑会直接复用 `full-frame/` 并重生成裁图；新增样张时
-先按平铺放进类目目录，跑一次脚本即自动归位并裁图，随后补登记 `DIALOG_TRUTH`。
+先按平铺放进类目目录，跑一次脚本即自动归位并裁图，随后在
+`tests/example_corpus.py` 的 `DIALOG_TRUTH` 里补登记标注。
 
 ### 13.6 评审收尾：回归防线与逐框过滤
 
@@ -1020,17 +1022,33 @@ uv run python scripts/verify_examples.py --crop-band # 裁带模式（读 crop-b
 | 项 | 问题 | 处理 |
 |---|---|---|
 | 语料完整性 | `corpus_directory()` 只检查目录存在，裁图缺失会缩小分母，极端情况 `0/0 passed` 且成功退出 | 新增 `resolve_corpus()`：目录为空即报错；裁带模式额外要求 `crop-band/` 与 `full-frame/` 的文件名集合一致，缺失/多余都列出具体文件名后以非 0 退出 |
-| 模式与布局匹配 | 回退到平铺目录时 `--crop-band` 仍按「已预裁剪」处理（不裁且跳过纵向过滤），与拆分前的裁带回归不等价 | 裁带模式只接受子目录布局，平铺语料直接报错并提示先跑 `split_examples.py`。选「拒绝」而非「切换为 `crop_dialogue_band=True`」的原因：引擎配置在循环外一次性初始化，两类语料布局不同时无法逐类切换 |
+| 模式与布局匹配 | 回退到平铺目录时裁带模式仍按「已预裁剪」处理（不裁且跳过纵向过滤），与拆分前的裁带回归不等价 | 裁带模式只接受子目录布局，平铺语料直接报错并提示先跑 `split_examples.py`。选「拒绝」而非「切换为 `crop_dialogue_band=True`」的原因：引擎按模式缓存、两类语料布局不同时无法逐类切换配置 |
 | dry-run 输入集 | 根目录与 `full-frame/` 同时有图时，`--dry-run` 只报待搬移图，报告张数少于真实运行 | dry-run 返回「`full-frame/` 已有图 + 本次待搬移图」（排除同名重复） |
 | UI 噪声过滤时机 | `filter_ui_noise` 对整串匹配，`Lv.90` 与对白同帧时不命中 | 已修：见下 |
 
 **逐框过滤 `full_text`**：两个 OCR 后端在拼接全帧文本前逐框调用
 `filter_ui_noise`，与门控路径 `classify_boxes`（第 432、494 行）的逐框口径一致。
 影响面经复核限定在降级兜底：`RecognitionResult.text` 仅被 `pipeline.py:397/407`、
-`server.py:437`、`scripts/verify_examples.py:222` 消费，且 `resolve_dialogue_text`
-只在门控未运行时才回退到它；门控路径消费 `roi_text`，不受影响。
+`server.py:437` 与回归用例（`tests/example_corpus.py` 的 `verify_one`）消费，且
+`resolve_dialogue_text` 只在门控未运行时才回退到它；门控路径消费 `roi_text`，不受影响。
 
 本轮验收（改动后重跑）：全帧 53/53、裁带 53/53（dialog 15/15、others 38/38）；
 `ruff check` / `ruff format --check` / `pyrefly check` 全部通过。另有两个负面用例
-已实测：删除 `crop-band/` 后跑 `--crop-band` 报「缺少裁带语料，请先拆分」；
-删掉其中一张裁图则报 `missing=['IMG_3431.PNG']`，两者均以非 0 退出。
+已实测：删除 `crop-band/` 后跑裁带模式用例报「缺少裁带语料，请先拆分」；
+删掉其中一张裁图则报 `missing=['IMG_3431.PNG']`，两者均在收集阶段失败。
+
+### 13.7 回归升级为 pytest 用例
+
+第 13 章最初以命令行脚本 `scripts/verify_examples.py` 做回归（打印 `x/N passed`
+并以退出码判成败）。现已升级为仓库级测试套件，脚本删除：
+
+| 位置 | 职责 |
+|---|---|
+| `tests/example_corpus.py` | `DIALOG_TRUTH` 与判定逻辑（`normalize` / `matches` / `load_image` / `resolve_corpus` / `verify_one`），是标注与口径的**唯一真源** |
+| `tests/conftest.py` | 导入路径装配 + 按模式缓存的 session 级 OCR 引擎夹具（两种模式配置不同，各自一个实例，会话结束统一释放） |
+| `tests/test_dialogue_gate.py` | 按「模式 × 类目 × 样张」参数化的用例（106 条）+ 一条「语料非空」兜底断言 |
+
+用例名形如 `crop-band-dialog/IMG_3431.PNG`，失败直接定位到模式与样张；语料
+缺失或不完整时**收集阶段即失败**（pytest 对空参数化只会 skip，故另设非空断言）。
+CI 在 PR 与 main 推送时跑 `uv run pytest`（另含 ruff 与 pyrefly），见
+`.github/workflows/ci.yml`。

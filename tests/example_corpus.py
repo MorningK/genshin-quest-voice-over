@@ -1,50 +1,54 @@
-"""验证 examples 语料的判定结果：dialog 应出对白，others 不应出声。
+"""examples 语料的判定逻辑与 ground truth，供 pytest 用例复用。
 
 这是对话门控的**回归基线**。凡是会影响判定的改动——调整
 ``recognition/dialogue_gate.py`` 的阈值、修改 ``app/textproc.py`` 的过滤规则、
-压缩或替换样张——都应重跑本脚本，确认两类语料的判定结果不退化。
+压缩或替换样张——都应重跑测试，确认两类语料的判定结果不退化。
 
 判定口径（与 ``docs/dialogue-region-discrimination.md`` 第 11 章一致）：
 
 - 语料按输入路径分子目录存放：``examples/<kind>/full-frame/`` 是全帧样张，
-  ``examples/<kind>/crop-band/`` 是从中裁出的对话面板。默认模式读 ``full-frame/``
-  （全帧 / Web 端路径），加 ``--crop-band`` 读 ``crop-band/`` 做裁带路径回归。
+  ``examples/<kind>/crop-band/`` 是从中裁出的对话面板。全帧模式读 ``full-frame/``
+  （全帧 / Web 端路径），裁带模式读 ``crop-band/`` 做裁带路径回归。
 - 裁带模式的样张**已经**是裁好的对话带，故用 ``pre_cropped_band=True`` 初始化：
   门控跳过纵向带比例过滤（纵向阈值是按完整画面标定的，对紧致裁图不成立），
   同时引擎不得再二次裁剪。
 - 语料完整性是硬要求：目录为空、或裁带语料与全帧语料的文件集合不一致时
-  直接报错退出，避免分母缩小导致 ``0/0 passed`` 这类回归假通过；裁带模式
-  也只接受已拆分的子目录布局，平铺语料需先跑 ``scripts/split_examples.py``。
+  直接报错，避免分母缩小导致回归假通过；裁带模式也只接受已拆分的子目录布局，
+  平铺语料需先跑 ``scripts/split_examples.py``。
 - ``examples/dialog`` 通过 = 触发朗读，且朗读文本与 ground truth 对白一致，
   且不含说话人名字（防止名字/头衔混入对白）。
 - ``examples/others`` 通过 = 朗读候选经 ``TextTracker.should_play`` 后返回
   ``None``，即最终不会触发语音合成。
-
-用法::
-
-    uv run python scripts/verify_examples.py
-    uv run python scripts/verify_examples.py --crop-band
-    uv run python scripts/verify_examples.py --verbose
 """
 
 from __future__ import annotations
 
-import argparse
 import re
 import sys
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import cv2
 import numpy as np
+
+if TYPE_CHECKING:
+    from genshin_voice_over.recognition.backends.rapidocr_engine import RapidOCREngine
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 from genshin_voice_over.app.textproc import TextTracker, resolve_dialogue_text  # noqa: E402
-from genshin_voice_over.recognition.backends.rapidocr_engine import RapidOCREngine  # noqa: E402
 from genshin_voice_over.recognition.base import RecognitionConfig  # noqa: E402
+
+# 两种判定模式对应的语料子目录
+MODE_FULL_FRAME = "full-frame"
+MODE_CROP_BAND = "crop-band"
+
+# 语料类目
+KIND_DIALOG = "dialog"
+KIND_OTHERS = "others"
 
 # ground truth 来自 docs/dialogue-region-discrimination.md 2.2 节的人工标注、
 # 第 11.1 节新增的 IMG_3431（超宽屏样张），以及第 12.1 节新增的 10 张 16:9 样张。
@@ -105,23 +109,36 @@ class CaseResult:
     reason: str
 
 
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    """解析命令行参数。
+@dataclass(frozen=True)
+class CorpusSource:
+    """某一类目在某个模式下的语料来源。
+
+    Attributes:
+        directory: 实际读取的语料目录。
+        is_split: 是否命中 ``full-frame/`` / ``crop-band/`` 子目录布局；
+            False 表示回退到类目根目录的平铺布局（拆分前的旧结构）。
+    """
+
+    directory: Path
+    is_split: bool
+
+
+def recognition_config(mode: str) -> RecognitionConfig:
+    """构造某一判定模式对应的识别配置。
 
     Args:
-        argv: 参数列表；None 时取 sys.argv[1:]。
+        mode: 判定模式，``MODE_FULL_FRAME`` 或 ``MODE_CROP_BAND``。
 
     Returns:
-        解析结果。
+        该模式的识别配置。裁带模式置 ``pre_cropped_band``：样张已是裁好的
+        对话带，引擎不得再二次裁剪，且门控需跳过纵向带比例过滤。
+
+    Raises:
+        ValueError: 模式名未知时抛出。
     """
-    parser = argparse.ArgumentParser(description="验证 examples 语料的对话门控判定结果")
-    parser.add_argument(
-        "--crop-band",
-        action="store_true",
-        help="读 crop-band/ 语料按裁带路径验证（默认读 full-frame/ 走全帧路径）",
-    )
-    parser.add_argument("--verbose", action="store_true", help="打印每张样张的判定明细")
-    return parser.parse_args(argv)
+    if mode not in (MODE_FULL_FRAME, MODE_CROP_BAND):
+        raise ValueError(f"Unknown corpus mode: {mode}")
+    return RecognitionConfig(crop_dialogue_band=False, pre_cropped_band=mode == MODE_CROP_BAND)
 
 
 def load_image(path: Path) -> np.ndarray:
@@ -144,6 +161,20 @@ def load_image(path: Path) -> np.ndarray:
     if image is None:
         raise ValueError(f"Failed to decode image: {path}")
     return cv2.cvtColor(image, cv2.COLOR_BGRA2BGR) if image.ndim == 3 and image.shape[2] == 4 else image
+
+
+def list_images(directory: Path) -> list[Path]:
+    """列出目录下的图片文件。
+
+    Args:
+        directory: 目标目录；不存在时返回空列表。
+
+    Returns:
+        按文件名排序的图片路径列表。
+    """
+    if not directory.is_dir():
+        return []
+    return sorted(p for p in directory.iterdir() if p.is_file() and p.suffix.lower() in _INPUT_SUFFIXES)
 
 
 def normalize(text: str) -> str:
@@ -176,43 +207,15 @@ def matches(truth: str, actual: str) -> bool:
     return SequenceMatcher(None, expected, got).ratio() >= _SIMILARITY_THRESHOLD
 
 
-@dataclass(frozen=True)
-class CorpusSource:
-    """某一类目在某个模式下的语料来源。
-
-    Attributes:
-        directory: 实际读取的语料目录。
-        is_split: 是否命中 ``full-frame/`` / ``crop-band/`` 子目录布局；
-            False 表示回退到类目根目录的平铺布局（拆分前的旧结构）。
-    """
-
-    directory: Path
-    is_split: bool
-
-
-def list_images(directory: Path) -> list[Path]:
-    """列出目录下的图片文件。
-
-    Args:
-        directory: 目标目录；不存在时返回空列表。
-
-    Returns:
-        按文件名排序的图片路径列表。
-    """
-    if not directory.is_dir():
-        return []
-    return sorted(p for p in directory.iterdir() if p.is_file() and p.suffix.lower() in _INPUT_SUFFIXES)
-
-
-def _validate_corpus(kind: str, subdir: str, source: CorpusSource) -> None:
+def _validate_corpus(kind: str, mode: str, source: CorpusSource) -> None:
     """校验语料目录是否可用于回归。
 
-    空目录会让分母退化成 0 而打印 ``0/0 passed`` 并成功退出；裁带语料缺失
-    同样会静默缩小分母。两者都必须在验证开始前拒绝，避免回归假通过。
+    空目录会让分母退化成 0 而让回归「全通过」；裁带语料缺失同样会静默缩小
+    分母。两者都必须在收集用例前拒绝，避免回归假通过。
 
     Args:
         kind: 类目名，"dialog" 或 "others"。
-        subdir: 模式对应的子目录名，"full-frame" 或 "crop-band"。
+        mode: 判定模式，``MODE_FULL_FRAME`` 或 ``MODE_CROP_BAND``。
         source: 解析出的语料来源。
 
     Raises:
@@ -220,16 +223,16 @@ def _validate_corpus(kind: str, subdir: str, source: CorpusSource) -> None:
     """
     # 先判布局再判空：未拆分的平铺目录在裁带模式下要先给出「去拆分」的提示，
     # 否则用户只会看到含义模糊的「目录为空」。
-    if subdir == "crop-band" and not source.is_split:
+    if mode == MODE_CROP_BAND and not source.is_split:
         raise ValueError(
             f"Missing crop-band corpus for '{kind}': {source.directory} is a flat legacy layout. "
             "Run `uv run python scripts/split_examples.py` to build full-frame/ and crop-band/ first."
         )
     if not list_images(source.directory):
         raise ValueError(f"Corpus directory is empty: {source.directory}")
-    if subdir != "crop-band":
+    if mode != MODE_CROP_BAND:
         return
-    full_names = {path.name for path in list_images(ROOT / "examples" / kind / "full-frame")}
+    full_names = {path.name for path in list_images(ROOT / "examples" / kind / MODE_FULL_FRAME)}
     band_names = {path.name for path in list_images(source.directory)}
     missing = sorted(full_names - band_names)
     unexpected = sorted(band_names - full_names)
@@ -240,7 +243,7 @@ def _validate_corpus(kind: str, subdir: str, source: CorpusSource) -> None:
         )
 
 
-def resolve_corpus(kind: str, subdir: str) -> CorpusSource:
+def resolve_corpus(kind: str, mode: str) -> CorpusSource:
     """按模式解析并校验某一类目的语料目录。
 
     语料按输入路径分为 ``full-frame/`` 与 ``crop-band/`` 两组；子目录不存在时
@@ -248,7 +251,7 @@ def resolve_corpus(kind: str, subdir: str) -> CorpusSource:
 
     Args:
         kind: 类目名，"dialog" 或 "others"。
-        subdir: 模式对应的子目录名，"full-frame" 或 "crop-band"。
+        mode: 判定模式，``MODE_FULL_FRAME`` 或 ``MODE_CROP_BAND``。
 
     Returns:
         通过校验的语料来源。
@@ -257,7 +260,7 @@ def resolve_corpus(kind: str, subdir: str) -> CorpusSource:
         NotADirectoryError: 子目录与平铺目录均不存在时抛出。
         ValueError: 目录为空、裁带模式未拆分、或裁带语料与全帧语料文件集合不一致时抛出。
     """
-    directory = ROOT / "examples" / kind / subdir
+    directory = ROOT / "examples" / kind / mode
     legacy = ROOT / "examples" / kind
     if directory.is_dir():
         source = CorpusSource(directory=directory, is_split=True)
@@ -265,103 +268,66 @@ def resolve_corpus(kind: str, subdir: str) -> CorpusSource:
         source = CorpusSource(directory=legacy, is_split=False)
     else:
         raise NotADirectoryError(f"Corpus directory not found: {directory}")
-    _validate_corpus(kind, subdir, source)
+    _validate_corpus(kind, mode, source)
     return source
 
 
-def verify_kind(engine: RapidOCREngine, kind: str, subdir: str, verbose: bool) -> list[CaseResult]:
-    """验证某一类目下的全部样张。
+def corpus_paths(kind: str, mode: str) -> list[Path]:
+    """列出某一类目在某一模式下的全部样张。
 
     Args:
-        engine: 已初始化的 OCR 引擎。
         kind: 类目名，"dialog" 或 "others"。
-        subdir: 模式对应的子目录名，"full-frame" 或 "crop-band"。
-        verbose: 是否打印逐张明细。
+        mode: 判定模式，``MODE_FULL_FRAME`` 或 ``MODE_CROP_BAND``。
 
     Returns:
-        逐张判定结果。
+        按文件名排序的样张路径列表。
 
     Raises:
         NotADirectoryError: 语料目录不存在时抛出。
         ValueError: 语料目录为空或裁带语料不完整时抛出。
     """
-    paths = list_images(resolve_corpus(kind, subdir).directory)
-
-    results: list[CaseResult] = []
-    for path in paths:
-        recognition = engine.recognize(load_image(path))
-        candidate = resolve_dialogue_text(recognition.roi_text, recognition.text, recognition.dialogue_gated)
-        request = TextTracker().should_play(candidate, recognition.speaker)
-        spoken = request.text if request is not None else ""
-
-        reason = ""
-        if kind == "dialog":
-            truth = DIALOG_TRUTH.get(path.name, "")
-            if not truth:
-                reason = "missing ground truth"
-            elif request is None:
-                reason = "no speech triggered"
-            elif not matches(truth, spoken):
-                reason = f"text mismatch, expect={truth!r}"
-            elif recognition.speaker and normalize(spoken).startswith(normalize(recognition.speaker)):
-                reason = "speaker name leaked into dialogue"
-        elif request is not None:
-            reason = f"unexpected speech: {spoken!r}"
-
-        results.append(
-            CaseResult(
-                name=f"{kind}/{path.name}",
-                passed=not reason,
-                roi_text=recognition.roi_text,
-                spoken=spoken,
-                speaker=recognition.speaker,
-                reason=reason,
-            )
-        )
-        if verbose:
-            mark = "PASS" if not reason else "FAIL"
-            print(f"[{mark}] {kind}/{path.name}")
-            print(f"        roi={recognition.roi_text!r} spoken={spoken!r} speaker={recognition.speaker!r}")
-            if reason:
-                print(f"        {reason}")
-    return results
+    return list_images(resolve_corpus(kind, mode).directory)
 
 
-def main(argv: list[str] | None = None) -> int:
-    """执行验证。
+def verify_one(engine: RapidOCREngine, kind: str, path: Path) -> CaseResult:
+    """对单张样张执行一次判定。
+
+    每张样张都使用**全新**的 ``TextTracker``：判定器内部持有跨帧累积状态，
+    复用会让上一张样张的文本影响下一张，与生产链路「每张图视为独立首帧」的
+    口径不符。
 
     Args:
-        argv: 参数列表；None 时取 sys.argv[1:]。
+        engine: 已按当前模式初始化的 OCR 引擎。
+        kind: 类目名，"dialog" 或 "others"。
+        path: 样张路径。
 
     Returns:
-        退出码，全部通过为 0，存在失败为 1。
+        判定结果；dialog 侧校验 ground truth，others 侧要求不触发朗读。
     """
-    args = parse_args(argv)
-    # 裁带模式的样张已是裁好的对话带：置 pre_cropped_band 让门控跳过纵向带比例过滤，
-    # 同时保持 crop_dialogue_band 为假，避免引擎把仅剩的对白再裁掉一遍。
-    # 该语义只对已拆分的 crop-band/ 成立，平铺语料会在 resolve_corpus 里被拒绝。
-    subdir = "crop-band" if args.crop_band else "full-frame"
-    engine = RapidOCREngine()
-    engine.initialize(RecognitionConfig(crop_dialogue_band=False, pre_cropped_band=args.crop_band))
+    recognition = engine.recognize(load_image(path))
+    candidate = resolve_dialogue_text(recognition.roi_text, recognition.text, recognition.dialogue_gated)
+    request = TextTracker().should_play(candidate, recognition.speaker)
+    spoken = request.text if request is not None else ""
 
-    results: list[CaseResult] = []
-    try:
-        for kind in ("dialog", "others"):
-            cases = verify_kind(engine, kind, subdir, args.verbose)
-            results.extend(cases)
-            passed = sum(1 for case in cases if case.passed)
-            print(f"{kind}: {passed}/{len(cases)} passed")
-    finally:
-        engine.release()
+    reason = ""
+    if kind == KIND_DIALOG:
+        truth = DIALOG_TRUTH.get(path.name, "")
+        if not truth:
+            reason = "missing ground truth"
+        elif request is None:
+            reason = "no speech triggered"
+        elif not matches(truth, spoken):
+            reason = f"text mismatch, expect={truth!r}"
+        elif recognition.speaker and normalize(spoken).startswith(normalize(recognition.speaker)):
+            reason = "speaker name leaked into dialogue"
+    elif request is not None:
+        reason = f"unexpected speech: {spoken!r}"
 
-    failures = [case for case in results if not case.passed]
-    if failures:
-        print("\nfailed:")
-        for case in failures:
-            print(f"  - {case.name}: {case.reason}")
-    print(f"\n{len(results) - len(failures)}/{len(results)} passed (mode={subdir})")
-    return 1 if failures else 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+    return CaseResult(
+        name=f"{kind}/{path.name}",
+        passed=not reason,
+        roi_text=recognition.roi_text,
+        spoken=spoken,
+        speaker=recognition.speaker,
+        reason=reason,
+    )

@@ -117,6 +117,7 @@ build = [
 dev = [
     "pre-commit>=4.6.0",
     "pyrefly>=1.2.0",
+    "pytest>=9.1.1",
     "ruff>=0.15.14",
 ]
 
@@ -177,6 +178,11 @@ ignore = [
     "B008",  # 允许在函数参数中直接调用
 ]
 
+[tool.ruff.lint.isort]
+# tests/ 下的模块（如 example_corpus）是本地模块，不是第三方包，
+# 需显式声明，否则 isort 会把它们与 pytest 排在同一组（语义误导）
+known-local-folder = ["tests"]
+
 [tool.ruff.format]
 # 使用单引号还是双引号
 quote-style = "double"
@@ -188,6 +194,16 @@ skip-magic-trailing-comma = false
 # ============================================
 # Pyrefly 配置 — 类型检查
 # ============================================
+# 注：pyrefly 只检查 src/，不含 tests/（测试代码依赖 pytest 与语料，不做类型门禁）
+
+# ============================================
+# Pytest 配置 — 回归测试
+# ============================================
+[tool.pytest.ini_options]
+# 用例目录：语料判定回归（全帧 / 裁带两条路径），见 tests/ 下各模块的 docstring
+testpaths = ["tests"]
+# 用例名带中文文件名，Windows 终端默认 GBK 输出可能显示为乱码；
+# 需要逐张明细时用 `uv run pytest -v --capture=no` 并以 UTF-8 终端查看
 [tool.pyrefly]
 # 要类型检查的源码
 project-includes = ["src"]
