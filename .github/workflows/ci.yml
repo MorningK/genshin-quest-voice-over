@@ -1,0 +1,108 @@
+name: CI
+
+# PR 与 main 更新后自动验证三件事：
+#   1. test      —— examples 语料的对话门控回归（pytest，两种判定路径）
+#   2. lint      —— ruff 检查与格式校验
+#   3. typecheck —— pyrefly 类型检查
+# workflow_dispatch 用于随时手动重跑，无需造一个空提交。
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# 只需读取代码，遵循最小权限
+permissions:
+  contents: read
+
+# 同一 ref 上的重复构建互相取消，PR 连续推送时只保留最新一次
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: 对话门控回归（pytest）
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: 安装 uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          # 缓存键默认跟随 uv.lock，依赖未变时跳过下载
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: 安装依赖
+        # --frozen 要求 uv.lock 与 pyproject.toml 一致，避免 CI 意外升级依赖；
+        # --group dev 装入 pytest。OCR 运行时（rapidocr / onnxruntime /
+        # opencv-python-headless）已在基础依赖中，无需额外可选组；
+        # 刻意不装 ocr-rapid-gpu——它与 ocr-rapid 在 [tool.uv].conflicts 中互斥。
+        run: uv sync --frozen --group dev
+
+      - name: 运行回归用例
+        # 语料回归：examples/dialog 应出对白、examples/others 不应出声，
+        # 两种判定路径（full-frame / crop-band）各跑一遍
+        run: uv run pytest -v
+
+  lint:
+    name: 静态检查（ruff）
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: 安装 uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: 安装依赖
+        run: uv sync --frozen --group dev
+
+      - name: 代码检查
+        run: uv run ruff check .
+
+      - name: 格式校验
+        run: uv run ruff format --check .
+
+  typecheck:
+    name: 类型检查（pyrefly）
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: 安装 uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: 安装依赖
+        run: uv sync --frozen --group dev
+
+      - name: 类型检查
+        # 显式声明目标平台为 windows：项目只面向 Windows，app/ 下大量使用
+        # ctypes.windll 等专有 API。runner 是 Linux，pyrefly 默认按当前平台解析
+        # typeshed，会把这些属性判为 missing-attribute 而误报（9 处）。
+        # 排除 gui/ 子包：它依赖 customtkinter（需 tkinter），仅随 PyInstaller
+        # 打包的 exe 分发，不进 PyPI 包，也不必在无显示环境的 runner 上检查。
+        # 注：pyproject 的 site-package-path 是 Windows 的 venv 布局，
+        # 在 Linux 上会打印一条无效路径警告，属 WARN，不影响结论。
+        run: uv run pyrefly check --python-platform windows --project-excludes src/genshin_voice_over/gui

@@ -823,7 +823,8 @@ Web 端无需此处理：`server.py` 每次请求是一问一答，不持有跨�
 
 语料与判定口径已固化，新增样张后按同样方法重跑即可：
 
-1. 遍历 `examples/dialog/` 与 `examples/others/`，用
+1. 遍历 `examples/dialog/full-frame/` 与 `examples/others/full-frame/`（语料自
+   第 13 章起按输入路径分子目录），用
    `cv2.imdecode(np.frombuffer(path.read_bytes(), np.uint8), cv2.IMREAD_COLOR)`
    读取（`cv2.imread` 对 `原神 ...png` 这类中文路径返回 `None`）；
 2. 以 `RecognitionConfig(crop_dialogue_band=False)` 初始化 `RapidOCREngine`，
@@ -837,3 +838,217 @@ Web 端无需此处理：`server.py` 每次请求是一问一答，不持有跨�
 这里，得到的 HSV 全部失真（说话人名字测出 `S=36` 而非 `S=255`），据此得出的
 「明度可分」结论也是假的。诊断脚本必须加自检：重跑出的 `roi_text` / `speaker`
 与引擎输出逐字比对，不一致即数据作废。
+
+---
+
+## 12. 第三轮：语料增至 53 张与底部 HUD 等级标签漏检修复
+
+本章记录语料从 38 张扩充到 53 张后暴露的新问题。沿用 1.2 节与 11.7 节的方法，
+全部数值均为脚本实测（且已吸取 11.7 节踩坑教训：先复刻 `crop → downscale →
+preprocess` 完整三段、`ImageTransform` 分子取降采样前的 `ocr_input`，再做取色）。
+
+### 12.1 新语料
+
+| 目录 | 数量 | 分辨率 | 说明 |
+|---|---|---|---|
+| `examples/dialog/` | 15（新增 10） | 全部 2560×1440 | 至冬国主线对白，覆盖派蒙 ×2、凯瑟琳 ×2、莎普林娜、塔佩兹尼科夫 ×3、阿罗夏、「高大的「伊兹梅洛」守卫」等说话人；含两张两行对白拼接样张 |
+| `examples/others/` | 38（新增 5） | 5 张 2560×1440 + 33 张 2556×1179 | 新增为大世界探索（拾取交互提示、队伍展示）、道具说明弹窗与锻造界面 |
+
+（上表为**拆分前**的平铺布局；第 13 章起两类语料各自分为 `full-frame/` 与
+`crop-band/` 两组子图，数量与文件名不变。）
+
+判定口径不变：`crop_dialogue_band=False`（全帧 / Web 路径）。10 条新增 ground
+truth 已登记进 `tests/example_corpus.py` 的 `DIALOG_TRUTH`（两行对白按阅读
+顺序拼接，与生产 `roi_text` 口径一致）。
+
+### 12.2 基线结果
+
+```
+dialog: 5/15 passed   ← 新增 10 张全部因缺 ground truth 记 FAIL（OCR 提取逐张目检全部正确，属标注缺口）
+others: 37/38 passed  ← 1 项判定缺陷
+```
+
+唯一判定 FAIL：`others/Genshin Impact 2026_9_5 23_56_19.png` 朗读了角色血条
+上方的等级标签 `Lv.90`。
+
+### 12.3 根因：三条防线全部擦边通过
+
+逐框实测（2560×1440 原图，全帧路径，变换 `scale=2.0 / offset=0`）：
+
+| 防线 | `Lv.90` 实测值 | 既有阈值 | 判定 |
+|---|---|---|---|
+| 几何 cy | 0.917 | `dialogue_cy_max=0.92` | 差 **0.003** 擦边通过 |
+| 颜色 | `H0 S18 V172`（暖调白） | 对白窗 `S∈[4,40]` 且 `H≤17.5` | 完整落入对白区（非纯中性白，`S=18` 而非 `S=0`） |
+| 文本 | 含字母数字 | 既有 6 条噪声正则 | 无命中 |
+
+同帧参照：底部 HUD 行其余成员（血量数值 `18006/18006` cy 0.917、`+` 0.941、
+按键提示 0.932、UID 0.985）cy 均 ≥0.917；而既有 5 个真对白框 cy 上限为 0.829
+（11.4 节）。**0.829 与 0.917 之间不存在任何游戏文本**，是干净的判别空隙。
+
+### 12.4 修复
+
+1. **`dialogue_cy_max` 0.92 → 0.90**（`recognition/dialogue_gate.py`）：对白侧
+   余量 0.071（0.829）、HUD 行侧余量 0.017（0.917），与原 0.92 对按键提示 0.932
+   的 0.012 同量级。裁带模式下纵向比例经 `ViewportBasis` 换算回整画面口径后
+   比较，语义一致不受影响。
+2. **文本层兜底**（`app/textproc.py` `_UI_NOISE_PATTERNS`）：新增
+   `^lv\.?\s*\d+$`（IGNORECASE），覆盖等级标签 `Lv.90` / `Lv90` / `Lv 90` 等
+   形态。必要性：降级路径（bytes 输入取色失败）下几何与颜色全部失效，只有
+   `filter_ui_noise` 仍生效。**显式否决「短纯 ASCII 令牌」的宽规则**——字幕
+   本身存在 `OK` 这类纯 ASCII 短句（AGENTS.md 去重不变式即以 `OK@` ↔ `OK`
+   为例），宽规则会误伤真对白。
+   补充（见 13.6 节）：该正则最初只对**整串**候选文本生效，`Lv.90` 与对白同帧时
+   拼进 `full_text` 后不再匹配；现已在两个 OCR 后端把过滤提前到**逐框**，
+   与门控路径口径一致。
+3. **未采用**：收紧颜色窗（`S=18` 与对白 `S=8~9` 同属低饱和暖白，无分离度，
+   收紧只会误伤）；收紧 `cx`（本例 0.419 居窗口正中，横向无可分离性）。
+
+### 12.5 修复后验收
+
+| 配置 | dialog | others |
+|---|---|---|
+| `crop_dialogue_band=False`（判定口径） | **15/15** | **38/38** |
+| `crop_dialogue_band=True`（桌面默认，回归确认） | **15/15** | **38/38** |
+
+（该回归确认行是**拆分前**的配置口径；第 13 章起裁带路径改为读 `crop-band/`
+语料并以 `pre_cropped_band=True` 初始化，见 13.4 节。）
+
+`ruff check` / `ruff format --check` 全部通过；`pyrefly check` 仅报 `gui/window.py`
+缺 `customtkinter`（环境未安装 gui 可选组所致，与本轮改动无关）。
+
+### 12.6 风险与残留问题
+
+| 风险 | 说明 | 缓解 |
+|---|---|---|
+| **HUD 行位置外推** | cy 0.917 仅 1 帧样本（2560×1440）；其他分辨率 / 宽高比下血条 UI 位置可能漂移，若上移进 0.90 以内则几何防线失效 | 文本层 `Lv` 正则独立兜底；新增样张时按 1.2 节方法重标定 |
+| **对白 cy 上限外推** | 0.829 基于既有 5 框；本轮 10 张对白经双模式回归佐证均低于 0.90，但更长多行对白的下沿未实测 | 0.071 余量较宽；实机观察 debug 日志中是否出现对白被裁 |
+| **`Lv` 正则变体漏拦** | OCR 若把标签识别成 `Lv.9O`、`LV：90` 等变体则正则不命中 | 几何修复已独立拦住该框，正则仅为降级路径的补充防线 |
+| **说话人旁路噪声** | `others/IMG_3464` 说话人输出「會會會會會」（OCR 噪声被判为金色名字），仅旁路日志、不进朗读 | 当前无影响；后续若实现按说话人切换音色，须先对旁路输出加过滤 |
+
+---
+
+## 13. 第四轮：语料按输入路径拆分为 full-frame / crop-band
+
+本章记录语料组织方式的调整：**不改判定逻辑**，只把「一类目录一组平铺图片」
+升级为「每类目录两组子图」，使两条判定路径各自消费对应形态的输入。
+
+### 13.1 动机与结构
+
+此前 `examples/dialog/`、`examples/others/` 各是一组平铺的全帧截图，两条路径
+回归时消费的是**同一批**全帧图：全帧路径直接读原图，裁带路径则由引擎临时裁出
+底部 35% 后再识别。这样裁带路径测的其实是「引擎自己的裁剪行为」，而不是
+「真实裁带输入」，语料无法反映桌面端实际喂给 OCR 的那张图。
+
+新结构（两类语料同构，文件名一一对应）：
+
+```
+examples/<kind>/
+├── full-frame/   原始完整截图，对应全帧 / Web 端路径
+└── crop-band/    从全帧图裁出的对话面板，对应桌面端的裁带路径
+```
+
+### 13.2 裁图口径
+
+裁图由 `scripts/split_examples.py` 生成，文件名与全帧图**保持一致**，故
+`tests/example_corpus.py` 的 `DIALOG_TRUTH` 按文件名命中，标注无需改写即可
+在两条路径上复用。
+
+定位方式不是固定比例，而是复用生产链路的门控结论：
+
+1. 对全帧图跑一次全帧 OCR；
+2. 复刻 `downscale → preprocess` 两段后调用 `classify_boxes`（复刻必须完整，
+   否则重蹈 11.7 节坐标空间错误的覆辙）；
+3. 取角色为 `DIALOGUE / SPEAKER_NAME / SPEAKER_TITLE` 的框，求外接矩形，
+   水平留 4% 图宽、垂直留 3% 图高的边距后裁出，并 clamp 到图像边界。
+
+**自检（强制）**：复刻结果经 `split_dialogue_parts` 得到的
+`dialogue / speaker / title` 必须与引擎输出**逐字相等**，不等即判定本次定位不可信，
+该图转回退方案。这是 11.7 节明确要求的自检，不做不得采信定位结果。
+
+**回退**：没有任何对话要素时回退 `crop_dialogue_band()` 的底部 35% 带，保证两组
+语料数量齐平。依据（`basis=panel` / `basis=fallback-band`）逐张写入报告供人工核查。
+
+本轮 53 张的分布：`dialog` 15 张全部按面板定位；`others` 仅 `IMG_3454`、`IMG_3464`
+判出对话要素，其余 36 张回退对话带——`others` 本就是「不应出声」的样本，多数
+画面里没有对话面板，回退是预期行为。
+
+### 13.3 pre_cropped_band：区分「谁来裁」
+
+新增 `RecognitionConfig.pre_cropped_band`，补上原有开关缺的一档语义：
+
+| 开关 | 谁来裁 | 门控是否跳过纵向带过滤 |
+|---|---|---|
+| `crop_dialogue_band=True` | 引擎裁底部 35% | 是 |
+| `capture_region` 非 None | 用户手动选区已裁好 | 是 |
+| `pre_cropped_band=True`（新增） | 调用方在引擎外裁好 | 是 |
+
+即：与 `crop_dialogue_band` 的区别是**引擎不得再裁**（否则会把仅剩的对白再切掉
+一遍底部 35%），仅纳入 `is_band_input` 的门控语义，`ViewportBasis(known=False)`
+与手动选区一致——纵向窗口阈值（`dialogue_cy_*` / `speaker_cy_*`）是按完整画面
+标定的，对紧致裁图不成立，必须按视口未知处理。
+
+`Det.limit_side_len=320` 的判据**仍只看 `crop_dialogue_band`**，未随本字段扩展：
+该值是针对「宽扁带状图」的推理优化，改动会影响手动选区路径，本轮不引入该风险。
+代价是裁带语料的 det 短边按默认 736 放大，回归耗时略高于全帧（实测 53 张
+52s vs 45s），判定结果不受影响。
+
+### 13.4 验收
+
+| 模式 | 语料 | 识别配置 | dialog | others |
+|---|---|---|---|---|
+| 全帧 | `full-frame/` | `crop_dialogue_band=False` | **15/15** | **38/38** |
+| 裁带 | `crop-band/` | `pre_cropped_band=True` | **15/15** | **38/38** |
+
+`ruff check` / `ruff format --check` / `pyrefly check` 全部通过。
+
+### 13.5 复现方法
+
+```bash
+uv run python scripts/split_examples.py --dry-run    # 预演：只出报告，不搬移不写图
+uv run python scripts/split_examples.py              # 搬入 full-frame/ 并生成 crop-band/
+uv run pytest                                        # 全部用例：两种模式 × 全部样张
+uv run pytest -k crop-band                           # 只跑裁带模式（读 crop-band/）
+uv run pytest -v                                     # 逐张明细，用例名含模式与文件名
+```
+
+脚本幂等：已拆分的语料上重跑会直接复用 `full-frame/` 并重生成裁图；新增样张时
+先按平铺放进类目目录，跑一次脚本即自动归位并裁图，随后在
+`tests/example_corpus.py` 的 `DIALOG_TRUTH` 里补登记标注。
+
+### 13.6 评审收尾：回归防线与逐框过滤
+
+拆分 PR 的评审提出四条意见，本轮处理其中三条（第四条为既有残留风险，已登记）：
+
+| 项 | 问题 | 处理 |
+|---|---|---|
+| 语料完整性 | `corpus_directory()` 只检查目录存在，裁图缺失会缩小分母，极端情况 `0/0 passed` 且成功退出 | 新增 `resolve_corpus()`：目录为空即报错；裁带模式额外要求 `crop-band/` 与 `full-frame/` 的文件名集合一致，缺失/多余都列出具体文件名后以非 0 退出 |
+| 模式与布局匹配 | 回退到平铺目录时裁带模式仍按「已预裁剪」处理（不裁且跳过纵向过滤），与拆分前的裁带回归不等价 | 裁带模式只接受子目录布局，平铺语料直接报错并提示先跑 `split_examples.py`。选「拒绝」而非「切换为 `crop_dialogue_band=True`」的原因：引擎按模式缓存、两类语料布局不同时无法逐类切换配置 |
+| dry-run 输入集 | 根目录与 `full-frame/` 同时有图时，`--dry-run` 只报待搬移图，报告张数少于真实运行 | dry-run 返回「`full-frame/` 已有图 + 本次待搬移图」（排除同名重复） |
+| UI 噪声过滤时机 | `filter_ui_noise` 对整串匹配，`Lv.90` 与对白同帧时不命中 | 已修：见下 |
+
+**逐框过滤 `full_text`**：两个 OCR 后端在拼接全帧文本前逐框调用
+`filter_ui_noise`，与门控路径 `classify_boxes`（第 432、494 行）的逐框口径一致。
+影响面经复核限定在降级兜底：`RecognitionResult.text` 仅被 `pipeline.py:397/407`、
+`server.py:437` 与回归用例（`tests/example_corpus.py` 的 `verify_one`）消费，且
+`resolve_dialogue_text` 只在门控未运行时才回退到它；门控路径消费 `roi_text`，不受影响。
+
+本轮验收（改动后重跑）：全帧 53/53、裁带 53/53（dialog 15/15、others 38/38）；
+`ruff check` / `ruff format --check` / `pyrefly check` 全部通过。另有两个负面用例
+已实测：删除 `crop-band/` 后跑裁带模式用例报「缺少裁带语料，请先拆分」；
+删掉其中一张裁图则报 `missing=['IMG_3431.PNG']`，两者均在收集阶段失败。
+
+### 13.7 回归升级为 pytest 用例
+
+第 13 章最初以命令行脚本 `scripts/verify_examples.py` 做回归（打印 `x/N passed`
+并以退出码判成败）。现已升级为仓库级测试套件，脚本删除：
+
+| 位置 | 职责 |
+|---|---|
+| `tests/example_corpus.py` | `DIALOG_TRUTH` 与判定逻辑（`normalize` / `matches` / `load_image` / `resolve_corpus` / `verify_one`），是标注与口径的**唯一真源** |
+| `tests/conftest.py` | 导入路径装配 + 按模式缓存的 session 级 OCR 引擎夹具（两种模式配置不同，各自一个实例，会话结束统一释放） |
+| `tests/test_dialogue_gate.py` | 按「模式 × 类目 × 样张」参数化的用例（106 条）+ 一条「语料非空」兜底断言 |
+
+用例名形如 `crop-band-dialog/IMG_3431.PNG`，失败直接定位到模式与样张；语料
+缺失或不完整时**收集阶段即失败**（pytest 对空参数化只会 skip，故另设非空断言）。
+CI 在 PR 与 main 推送时跑 `uv run pytest`（另含 ruff 与 pyrefly），见
+`.github/workflows/ci.yml`。

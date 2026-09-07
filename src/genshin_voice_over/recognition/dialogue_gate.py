@@ -101,7 +101,10 @@ class DialogueGateConfig:
         dialogue_cx_min: 对白水平中心窗口下界，用于排除左下角 HUD 图标（实测 cx=0.175）。
         dialogue_cx_max: 对白水平中心窗口上界。
         dialogue_cy_min: 对白垂直中心窗口下界。
-        dialogue_cy_max: 对白垂直中心窗口上界，用于排除按键提示（cy 0.932）与 UID（cy 0.985）。
+        dialogue_cy_max: 对白垂直中心窗口上界，用于排除底部 HUD 行（血条上方的等级标签
+            Lv.90 cy 0.917、血量数值 cy 0.917）、按键提示（cy 0.932）与 UID（cy 0.985）。
+            实测对白 cy 上限 0.829，取 0.90 时与对白侧余量 0.071、与 HUD 行侧余量 0.017。
+            该值曾为 0.92，被 cy=0.917 的等级标签以 0.003 的差距擦边通过（见 docs 第 12 章）。
         speaker_cy_min: 说话人纵向窗口下界。
         speaker_cy_max: 说话人纵向窗口上界。实测名字 cy 0.772~0.774、头衔 cy 0.801。
     """
@@ -118,7 +121,7 @@ class DialogueGateConfig:
     dialogue_cx_min: float = 0.30
     dialogue_cx_max: float = 0.62
     dialogue_cy_min: float = 0.70
-    dialogue_cy_max: float = 0.92
+    dialogue_cy_max: float = 0.90
     speaker_cy_min: float = 0.72
     speaker_cy_max: float = 0.82
 

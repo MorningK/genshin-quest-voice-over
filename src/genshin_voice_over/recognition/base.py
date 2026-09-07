@@ -37,6 +37,11 @@ class RecognitionConfig:
             对 bytes 输入不生效（保持原图），Web 端行为不受影响。
             注意：手动指定 capture_region 时该开关为 False（选区无需再裁），
             但垂直过滤同样需要停用，判定统一走 is_band_input。
+        pre_cropped_band: 送入 OCR 的图像是否**已经**是预先裁好的对话带 / 对话面板。
+            与 crop_dialogue_band 的区别在于：后者要求引擎自己裁，本字段表示
+            调用方已经裁好、引擎不得再裁（否则会把仅剩的对白再切掉一遍）。
+            典型用途是消费已裁剪的语料或外部预处理结果。仅影响门控的垂直
+            过滤语义（见 is_band_input），不改变 Det 尺寸策略。
     """
 
     language: str = "ch"
@@ -47,19 +52,22 @@ class RecognitionConfig:
     capture_region: Region | None = None
     max_inference_threads: int | None = DEFAULT_MAX_INFERENCE_THREADS
     crop_dialogue_band: bool = False
+    pre_cropped_band: bool = False
 
     @property
     def is_band_input(self) -> bool:
         """送入 OCR 的图像是否已天然等价于"底部对白带"。
 
         为 True 时不应再按底部比例做垂直过滤，否则会把带内的字幕误判为
-        "对白带之上的噪声"而剔除。成立条件二选一：
+        "对白带之上的噪声"而剔除。成立条件三选一：
 
         1. ``crop_dialogue_band`` 为真——图像已由 ``crop_dialogue_band()`` 裁剪；
         2. ``capture_region`` 非 None——用户手动选区本身即预裁剪好的对白带，
            与 ``AppConfig.to_recognition_config()``（据其关闭自动裁剪）和
            ``VoiceOverApp._extract_gating_band()``（据其对整个选区做帧门控）
-           保持同一不变量。
+           保持同一不变量；
+        3. ``pre_cropped_band`` 为真——调用方在引擎外部裁好对话带后送入，
+           引擎不再裁剪（``crop_dialogue_band`` 为假），但过滤语义与上述两者一致。
 
         采用只读属性而非派生字段：Web 端会在构造后覆写 ``crop_dialogue_band``，
         属性按访问时求值才能正确反映该覆写。
@@ -67,7 +75,7 @@ class RecognitionConfig:
         Returns:
             True 表示输入已等价于对白带，应跳过垂直带比例过滤。
         """
-        return self.crop_dialogue_band or self.capture_region is not None
+        return self.crop_dialogue_band or self.capture_region is not None or self.pre_cropped_band
 
 
 @dataclass
@@ -90,7 +98,10 @@ class RecognitionResult:
     """OCR 识别结果。
 
     Attributes:
-        text: 识别出的完整文本内容。
+        text: 识别出的完整文本内容，已**逐框**过滤 UI 噪声（与门控路径
+            ``classify_boxes`` 的口径一致，避免 ``Lv.90`` 之类的标签与对白同帧时
+            混进整串而无法被下游的整串匹配拦下）。仅在门控未运行时作朗读兜底，
+            门控运行时朗读只消费 ``roi_text``。
         confidence: 整体置信度 (0.0 ~ 1.0)，为各区域置信度的平均值。
         boxes: 按阅读顺序排列的各文字区域列表。
         timestamp: 识别完成时间戳（Unix 秒）。
