@@ -14,6 +14,11 @@
 （``S=0``）或高饱和暖白（``H20~24 / S14~29``）。仅靠饱和度无法区分对白与纯白
 界面文本，仅靠色相亦不可（OpenCV 对 ``S=0`` 给出 ``H=0``），必须联合判定。
 
+该暖调特征来自经 ``--max-side 1280`` 压缩的语料：原生分辨率的实机捕获帧里对白
+笔画就是纯中性白（``S=0 / V=255``，缩到 1280 后仍为 ``S=0``），会被饱和度下界
+拦掉。故额外提供**纯白备份路径**（见 :func:`_is_pure_white_dialogue`），在文字近
+中性白时改用「明度 + 宽度 + 高宽比 + 局部背景」联合判定放行。
+
 颜色不可用时（无原始帧可供取色的降级路径）整体委托给既有的
 ``extract_dialogue_boxes`` 做纯几何过滤，行为与改造前完全一致，且不做说话人提取。
 
@@ -67,12 +72,16 @@ class BoxVisual:
         saturation: 饱和度，0–255。
         value: 明度，0–255。
         red_minus_blue: 红蓝通道差，正值偏暖、负值偏冷。
+        background_luma: 框周边局部背景的中值亮度（0–255），用于区分绘制在
+            半透明深色对白面板上的对白与绘制在亮色界面上的说明文本；
+            区域退化或取样失败时为 None。
     """
 
     hue: float
     saturation: float
     value: float
     red_minus_blue: float
+    background_luma: float | None = None
 
 
 @dataclass(frozen=True)
@@ -107,6 +116,20 @@ class DialogueGateConfig:
             该值曾为 0.92，被 cy=0.917 的等级标签以 0.003 的差距擦边通过（见 docs 第 12 章）。
         speaker_cy_min: 说话人纵向窗口下界。
         speaker_cy_max: 说话人纵向窗口上界。实测名字 cy 0.772~0.774、头衔 cy 0.801。
+        pure_white_value_min: 纯白对白路径的明度下限。native 分辨率实机帧的对白笔画被
+            渲染为纯白（V=255），而同为 S=0 的界面暗灰数值（如 ``10``）V=123；
+            取 160 时两侧余量分别为 31 与 37。
+        pure_white_width_min: 纯白对白路径的宽度比下限。对白整行 w=0.349~0.358，
+            而纯白短标签（``+20`` w=0.032、``10`` w=0.016）远低于此；取 0.08 时
+            与对白侧余量 0.269、与短标签侧余量 0.048。代价是极短句（如「再见。」）
+            在纯白渲染下会漏读，符合「宁可漏读一句」的既定取舍。
+        pure_white_height_width_max: 纯白对白路径的框高宽比上限。对白行 23/458=0.050，
+            界面大字号名称框 51/134=0.380；取 0.15 时与对白侧余量 0.10、与大字号侧
+            余量 0.23。以高宽比而非画面高度归一：裁带/选区输入的高度口径与全帧
+            不同，按高度归一时裁带内同一行对白的比值会放大数倍而误判。
+        pure_white_bg_luma_max: 纯白对白路径允许的局部背景亮度上限。对白绘制在半透明
+            深色面板上（实测 46~74），而全屏教程页/亮色面板上的段落文本背景为
+            241~255；取 140 时两侧余量分别为 66 与 101。
     """
 
     gold_saturation_min: float = 100.0
@@ -124,6 +147,10 @@ class DialogueGateConfig:
     dialogue_cy_max: float = 0.90
     speaker_cy_min: float = 0.72
     speaker_cy_max: float = 0.82
+    pure_white_value_min: float = 160.0
+    pure_white_width_min: float = 0.08
+    pure_white_height_width_max: float = 0.15
+    pure_white_bg_luma_max: float = 140.0
 
 
 # 门控的默认阈值实例。各后端直接复用，避免同一套阈值散落到多个引擎实现里。
@@ -168,10 +195,16 @@ class BoxGeometry:
     Attributes:
         center_x_ratio: 框中心横坐标占画面宽度的比例。
         center_y_ratio: 框中心纵坐标占画面高度的比例。
+        width_ratio: 框宽度占画面宽度的比例，用于区分整行对白与短标签/数值。
+        height_width_ratio: 框高与框宽之比，用于区分对白字号与大字号名称框。以框宽
+            而非画面高度归一：裁带/选区输入的高度口径与全帧不同，按高度归一在
+            这些模式下会整体失效，而高宽比在同一坐标系内恒定。
     """
 
     center_x_ratio: float
     center_y_ratio: float
+    width_ratio: float
+    height_width_ratio: float
 
 
 @dataclass(frozen=True)
@@ -224,9 +257,13 @@ def _geometry(box: RecognitionBox, ref_width: int, ref_height: int) -> BoxGeomet
         return None
     xs = [p.x for p in box.points]
     ys = [p.y for p in box.points]
+    box_width = max(xs) - min(xs)
+    box_height = max(ys) - min(ys)
     return BoxGeometry(
         center_x_ratio=(min(xs) + max(xs)) / 2.0 / ref_width,
         center_y_ratio=(min(ys) + max(ys)) / 2.0 / ref_height,
+        width_ratio=(max(xs) - min(xs)) / ref_width,
+        height_width_ratio=box_height / max(1, box_width),
     )
 
 
@@ -282,6 +319,40 @@ def _is_dialogue_white(visual: BoxVisual, config: DialogueGateConfig) -> bool:
     )
 
 
+def _is_pure_white_dialogue(visual: BoxVisual, geometry: BoxGeometry, config: DialogueGateConfig) -> bool:
+    """判断近中性白文字是否为「纯白渲染」的对白正文（主颜色规则失效时的备份路径）。
+
+    语料样张经 ``--max-side 1280`` 压缩后，对白笔画与深色面板混色呈暖调低饱和灰
+    （``H13~15 / S8~9``），故主规则要求 ``S >= 4``；而实机捕获的原生分辨率帧里
+    对白笔画就是纯中性白（``S=0 / V=255``，缩到 1280 后仍为 ``S=0``），会被
+    该下界拦掉。本路径在文字近中性白时改用「明度 + 宽度 + 高宽比 + 局部背景」
+    联合判定放行，四项缺一不可：
+
+    - 明度：排除与对白同为 ``S=0`` 的暗灰界面数值（``10`` 的 V=123）；
+    - 宽度：排除纯白短标签（``+20`` w=0.032、``10`` w=0.016）；
+    - 高宽比：排除大字号名称框（51/134=0.380）；
+    - 局部背景：排除画在亮色界面上的段落说明（背景 241~255），这是唯一能分离
+      圣遗物教程段落（几何与对白几乎重合）的特征。
+
+    Args:
+        visual: 文字主色特征，含局部背景亮度。
+        geometry: 框的几何比例特征。
+        config: 门控阈值配置。
+
+    Returns:
+        True 表示应判为对白正文。
+    """
+    if visual.saturation >= config.dialogue_saturation_min:
+        return False
+    if visual.value < config.pure_white_value_min:
+        return False
+    if geometry.width_ratio < config.pure_white_width_min:
+        return False
+    if geometry.height_width_ratio > config.pure_white_height_width_max:
+        return False
+    return visual.background_luma is not None and visual.background_luma < config.pure_white_bg_luma_max
+
+
 def _is_inside_dialogue_window(geometry: BoxGeometry, config: DialogueGateConfig, cy: float | None) -> bool:
     """判断框中心是否落在对白可能出现的窗口内。
 
@@ -301,10 +372,48 @@ def _is_inside_dialogue_window(geometry: BoxGeometry, config: DialogueGateConfig
     return config.dialogue_cy_min <= cy <= config.dialogue_cy_max
 
 
-def extract_box_visual(image: np.ndarray, region: Region, percentile: int) -> BoxVisual | None:
-    """从原始 BGR 帧的指定区域提取文字主色。
+def _background_luma(image: np.ndarray, region: Region) -> float | None:
+    """估算识别框周边的局部背景亮度。
 
-    取区域内亮度处于高分位的像素（文字笔画）计算 BGR 中值后转为 HSV。
+    把框横向左右各外扩半个框宽、纵向上下各外扩一个框高后取「亮度不高于中位数的
+    像素」的中值：外扩是为了让取样区以背景为主（框内主要是文字笔画），取较暗一半
+    是进一步排除残留笔画像素。据此区分绘制在半透明深色对白面板上的对白
+    （实测 46~74）与绘制在亮色界面上的说明文本（实测 241~255）。
+
+    Args:
+        image: 原始捕获帧，BGR 格式的 numpy 数组。
+        region: 已映射回原始帧坐标系的识别框区域。
+
+    Returns:
+        局部背景亮度（0–255）；区域退化、越界或缺少依赖时返回 None。
+    """
+    try:
+        import cv2
+        import numpy as np
+    except ImportError:  # pragma: no cover - 缺依赖时由上层降级
+        return None
+
+    img_h, img_w = image.shape[:2]
+    box_w = max(0, region.right - region.left)
+    box_h = max(0, region.bottom - region.top)
+    left = max(0, min(region.left - box_w // 2, img_w - 1))
+    top = max(0, min(region.top - box_h, img_h - 1))
+    right = max(0, min(region.right + box_w // 2, img_w - 1))
+    bottom = max(0, min(region.bottom + box_h, img_h - 1))
+    if right <= left or bottom <= top:
+        return None
+
+    roi = image[top : bottom + 1, left : right + 1]
+    luma = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    dark = luma[luma <= float(np.percentile(luma, 50))]
+    return float(np.median(dark)) if dark.size else None
+
+
+def extract_box_visual(image: np.ndarray, region: Region, percentile: int) -> BoxVisual | None:
+    """从原始 BGR 帧的指定区域提取文字主色与局部背景亮度。
+
+    取区域内亮度处于高分位的像素（文字笔画）计算 BGR 中值后转为 HSV，
+    并顺带估算框周边的局部背景亮度。
     必须在**原始 BGR 帧**上取样：送入 OCR 的图像已被 ``preprocess_frame``
     转为灰度并做过 CLAHE，颜色信息在进入识别前即已丢失。
 
@@ -345,6 +454,7 @@ def extract_box_visual(image: np.ndarray, region: Region, percentile: int) -> Bo
         saturation=float(hsv[1]),
         value=float(hsv[2]),
         red_minus_blue=float(bgr[2] - bgr[0]),
+        background_luma=_background_luma(image, region),
     )
 
 
@@ -467,6 +577,7 @@ def _classify_with_visuals(
     ref_height, ref_width = max(1, image_shape[0]), max(1, image_shape[1])
     roles: list[BoxRole] = [BoxRole.NOISE] * len(boxes)
     speaker_indices: list[int] = []
+    kept_pure_white = 0
 
     for index, (box, visual) in enumerate(zip(boxes, visuals, strict=True)):
         geometry = _geometry(box, ref_width, ref_height)
@@ -487,13 +598,18 @@ def _classify_with_visuals(
         # 宁可漏读一句，也不要把说话人名字当对白朗读出来。
         if visual is None:
             continue
-        if not _is_dialogue_white(visual, config):
-            continue
         if not _is_inside_dialogue_window(geometry, config, cy):
             continue
         if filter_ui_noise(box.text) is None:
             continue
-        roles[index] = BoxRole.DIALOGUE
+        if _is_dialogue_white(visual, config):
+            roles[index] = BoxRole.DIALOGUE
+            continue
+        # 主颜色规则要求暖调低饱和灰，实机帧的纯白对白会落在下界之外，
+        # 交给纯白备份路径按「明度 + 宽度 + 高度 + 局部背景」复核。
+        if _is_pure_white_dialogue(visual, geometry, config):
+            roles[index] = BoxRole.DIALOGUE
+            kept_pure_white += 1
 
     speaker_indices.sort(key=lambda index: _center_y(boxes[index]))
     for order, index in enumerate(speaker_indices):
@@ -502,8 +618,9 @@ def _classify_with_visuals(
     classified = [ClassifiedBox(box=box, role=role) for box, role in zip(boxes, roles, strict=True)]
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug(
-            "Dialogue gate: dialogue=%d speaker=%d title=%d noise=%d (ref=%dx%d, vertical=%s).",
+            "Dialogue gate: dialogue=%d (pure_white=%d) speaker=%d title=%d noise=%d (ref=%dx%d, vertical=%s).",
             sum(1 for c in classified if c.role is BoxRole.DIALOGUE),
+            kept_pure_white,
             sum(1 for c in classified if c.role is BoxRole.SPEAKER_NAME),
             sum(1 for c in classified if c.role is BoxRole.SPEAKER_TITLE),
             sum(1 for c in classified if c.role is BoxRole.NOISE),
