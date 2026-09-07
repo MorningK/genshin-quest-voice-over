@@ -823,7 +823,8 @@ Web 端无需此处理：`server.py` 每次请求是一问一答，不持有跨�
 
 语料与判定口径已固化，新增样张后按同样方法重跑即可：
 
-1. 遍历 `examples/dialog/` 与 `examples/others/`，用
+1. 遍历 `examples/dialog/full-frame/` 与 `examples/others/full-frame/`（语料自
+   第 13 章起按输入路径分子目录），用
    `cv2.imdecode(np.frombuffer(path.read_bytes(), np.uint8), cv2.IMREAD_COLOR)`
    读取（`cv2.imread` 对 `原神 ...png` 这类中文路径返回 `None`）；
 2. 以 `RecognitionConfig(crop_dialogue_band=False)` 初始化 `RapidOCREngine`，
@@ -852,6 +853,9 @@ preprocess` 完整三段、`ImageTransform` 分子取降采样前的 `ocr_input`
 |---|---|---|---|
 | `examples/dialog/` | 15（新增 10） | 全部 2560×1440 | 至冬国主线对白，覆盖派蒙 ×2、凯瑟琳 ×2、莎普林娜、塔佩兹尼科夫 ×3、阿罗夏、「高大的「伊兹梅洛」守卫」等说话人；含两张两行对白拼接样张 |
 | `examples/others/` | 38（新增 5） | 5 张 2560×1440 + 33 张 2556×1179 | 新增为大世界探索（拾取交互提示、队伍展示）、道具说明弹窗与锻造界面 |
+
+（上表为**拆分前**的平铺布局；第 13 章起两类语料各自分为 `full-frame/` 与
+`crop-band/` 两组子图，数量与文件名不变。）
 
 判定口径不变：`crop_dialogue_band=False`（全帧 / Web 路径）。10 条新增 ground
 truth 已登记进 `scripts/verify_examples.py` 的 `DIALOG_TRUTH`（两行对白按阅读
@@ -903,6 +907,9 @@ others: 37/38 passed  ← 1 项判定缺陷
 | `crop_dialogue_band=False`（判定口径） | **15/15** | **38/38** |
 | `crop_dialogue_band=True`（桌面默认，回归确认） | **15/15** | **38/38** |
 
+（该回归确认行是**拆分前**的配置口径；第 13 章起裁带路径改为读 `crop-band/`
+语料并以 `pre_cropped_band=True` 初始化，见 13.4 节。）
+
 `ruff check` / `ruff format --check` 全部通过；`pyrefly check` 仅报 `gui/window.py`
 缺 `customtkinter`（环境未安装 gui 可选组所致，与本轮改动无关）。
 
@@ -914,3 +921,91 @@ others: 37/38 passed  ← 1 项判定缺陷
 | **对白 cy 上限外推** | 0.829 基于既有 5 框；本轮 10 张对白经双模式回归佐证均低于 0.90，但更长多行对白的下沿未实测 | 0.071 余量较宽；实机观察 debug 日志中是否出现对白被裁 |
 | **`Lv` 正则变体漏拦** | OCR 若把标签识别成 `Lv.9O`、`LV：90` 等变体则正则不命中 | 几何修复已独立拦住该框，正则仅为降级路径的补充防线 |
 | **说话人旁路噪声** | `others/IMG_3464` 说话人输出「會會會會會」（OCR 噪声被判为金色名字），仅旁路日志、不进朗读 | 当前无影响；后续若实现按说话人切换音色，须先对旁路输出加过滤 |
+
+---
+
+## 13. 第四轮：语料按输入路径拆分为 full-frame / crop-band
+
+本章记录语料组织方式的调整：**不改判定逻辑**，只把「一类目录一组平铺图片」
+升级为「每类目录两组子图」，使两条判定路径各自消费对应形态的输入。
+
+### 13.1 动机与结构
+
+此前 `examples/dialog/`、`examples/others/` 各是一组平铺的全帧截图，两条路径
+回归时消费的是**同一批**全帧图：全帧路径直接读原图，裁带路径则由引擎临时裁出
+底部 35% 后再识别。这样裁带路径测的其实是「引擎自己的裁剪行为」，而不是
+「真实裁带输入」，语料无法反映桌面端实际喂给 OCR 的那张图。
+
+新结构（两类语料同构，文件名一一对应）：
+
+```
+examples/<kind>/
+├── full-frame/   原始完整截图，对应全帧 / Web 端路径
+└── crop-band/    从全帧图裁出的对话面板，对应桌面端的裁带路径
+```
+
+### 13.2 裁图口径
+
+裁图由 `scripts/split_examples.py` 生成，文件名与全帧图**保持一致**，故
+`scripts/verify_examples.py` 的 `DIALOG_TRUTH` 按文件名命中，标注无需改写即可
+在两条路径上复用。
+
+定位方式不是固定比例，而是复用生产链路的门控结论：
+
+1. 对全帧图跑一次全帧 OCR；
+2. 复刻 `downscale → preprocess` 两段后调用 `classify_boxes`（复刻必须完整，
+   否则重蹈 11.7 节坐标空间错误的覆辙）；
+3. 取角色为 `DIALOGUE / SPEAKER_NAME / SPEAKER_TITLE` 的框，求外接矩形，
+   水平留 4% 图宽、垂直留 3% 图高的边距后裁出，并 clamp 到图像边界。
+
+**自检（强制）**：复刻结果经 `split_dialogue_parts` 得到的
+`dialogue / speaker / title` 必须与引擎输出**逐字相等**，不等即判定本次定位不可信，
+该图转回退方案。这是 11.7 节明确要求的自检，不做不得采信定位结果。
+
+**回退**：没有任何对话要素时回退 `crop_dialogue_band()` 的底部 35% 带，保证两组
+语料数量齐平。依据（`basis=panel` / `basis=fallback-band`）逐张写入报告供人工核查。
+
+本轮 53 张的分布：`dialog` 15 张全部按面板定位；`others` 仅 `IMG_3454`、`IMG_3464`
+判出对话要素，其余 36 张回退对话带——`others` 本就是「不应出声」的样本，多数
+画面里没有对话面板，回退是预期行为。
+
+### 13.3 pre_cropped_band：区分「谁来裁」
+
+新增 `RecognitionConfig.pre_cropped_band`，补上原有开关缺的一档语义：
+
+| 开关 | 谁来裁 | 门控是否跳过纵向带过滤 |
+|---|---|---|
+| `crop_dialogue_band=True` | 引擎裁底部 35% | 是 |
+| `capture_region` 非 None | 用户手动选区已裁好 | 是 |
+| `pre_cropped_band=True`（新增） | 调用方在引擎外裁好 | 是 |
+
+即：与 `crop_dialogue_band` 的区别是**引擎不得再裁**（否则会把仅剩的对白再切掉
+一遍底部 35%），仅纳入 `is_band_input` 的门控语义，`ViewportBasis(known=False)`
+与手动选区一致——纵向窗口阈值（`dialogue_cy_*` / `speaker_cy_*`）是按完整画面
+标定的，对紧致裁图不成立，必须按视口未知处理。
+
+`Det.limit_side_len=320` 的判据**仍只看 `crop_dialogue_band`**，未随本字段扩展：
+该值是针对「宽扁带状图」的推理优化，改动会影响手动选区路径，本轮不引入该风险。
+代价是裁带语料的 det 短边按默认 736 放大，回归耗时略高于全帧（实测 53 张
+52s vs 45s），判定结果不受影响。
+
+### 13.4 验收
+
+| 模式 | 语料 | 识别配置 | dialog | others |
+|---|---|---|---|---|
+| 全帧 | `full-frame/` | `crop_dialogue_band=False` | **15/15** | **38/38** |
+| 裁带 | `crop-band/` | `pre_cropped_band=True` | **15/15** | **38/38** |
+
+`ruff check` / `ruff format --check` / `pyrefly check` 全部通过。
+
+### 13.5 复现方法
+
+```bash
+uv run python scripts/split_examples.py --dry-run    # 预演：只出报告，不搬移不写图
+uv run python scripts/split_examples.py              # 搬入 full-frame/ 并生成 crop-band/
+uv run python scripts/verify_examples.py             # 全帧模式（读 full-frame/）
+uv run python scripts/verify_examples.py --crop-band # 裁带模式（读 crop-band/）
+```
+
+脚本幂等：已拆分的语料上重跑会直接复用 `full-frame/` 并重生成裁图；新增样张时
+先按平铺放进类目目录，跑一次脚本即自动归位并裁图，随后补登记 `DIALOG_TRUTH`。

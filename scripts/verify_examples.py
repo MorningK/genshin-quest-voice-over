@@ -6,8 +6,12 @@
 
 判定口径（与 ``docs/dialogue-region-discrimination.md`` 第 11 章一致）：
 
-- 识别配置默认 ``crop_dialogue_band=False``（全帧 / Web 端路径），
-  加 ``--crop-band`` 可切到桌面默认的裁带路径做回归确认。
+- 语料按输入路径分子目录存放：``examples/<kind>/full-frame/`` 是全帧样张，
+  ``examples/<kind>/crop-band/`` 是从中裁出的对话面板。默认模式读 ``full-frame/``
+  （全帧 / Web 端路径），加 ``--crop-band`` 读 ``crop-band/`` 做裁带路径回归。
+- 裁带模式的样张**已经**是裁好的对话带，故用 ``pre_cropped_band=True`` 初始化：
+  门控跳过纵向带比例过滤（纵向阈值是按完整画面标定的，对紧致裁图不成立），
+  同时引擎不得再二次裁剪。
 - ``examples/dialog`` 通过 = 触发朗读，且朗读文本与 ground truth 对白一致，
   且不含说话人名字（防止名字/头衔混入对白）。
 - ``examples/others`` 通过 = 朗读候选经 ``TextTracker.should_play`` 后返回
@@ -108,7 +112,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         解析结果。
     """
     parser = argparse.ArgumentParser(description="验证 examples 语料的对话门控判定结果")
-    parser.add_argument("--crop-band", action="store_true", help="按桌面默认的对白带裁剪路径验证（默认走全帧路径）")
+    parser.add_argument(
+        "--crop-band",
+        action="store_true",
+        help="读 crop-band/ 语料按裁带路径验证（默认读 full-frame/ 走全帧路径）",
+    )
     parser.add_argument("--verbose", action="store_true", help="打印每张样张的判定明细")
     return parser.parse_args(argv)
 
@@ -165,23 +173,47 @@ def matches(truth: str, actual: str) -> bool:
     return SequenceMatcher(None, expected, got).ratio() >= _SIMILARITY_THRESHOLD
 
 
-def verify_kind(engine: RapidOCREngine, kind: str, verbose: bool) -> list[CaseResult]:
+def corpus_directory(kind: str, subdir: str) -> Path:
+    """解析某一类目在某个模式下的语料目录。
+
+    语料按输入路径分为 ``full-frame/`` 与 ``crop-band/`` 两组；两类目录尚为平铺的
+    旧布局（未拆分）时回退到类目目录本身，保证脚本在拆分前后都能跑。
+
+    Args:
+        kind: 类目名，"dialog" 或 "others"。
+        subdir: 模式对应的子目录名，"full-frame" 或 "crop-band"。
+
+    Returns:
+        语料目录。
+
+    Raises:
+        NotADirectoryError: 类目目录与其子目录均不存在时抛出。
+    """
+    directory = ROOT / "examples" / kind / subdir
+    if directory.is_dir():
+        return directory
+    legacy = ROOT / "examples" / kind
+    if legacy.is_dir():
+        return legacy
+    raise NotADirectoryError(f"Corpus directory not found: {directory}")
+
+
+def verify_kind(engine: RapidOCREngine, kind: str, subdir: str, verbose: bool) -> list[CaseResult]:
     """验证某一类目下的全部样张。
 
     Args:
         engine: 已初始化的 OCR 引擎。
-        kind: 子目录名，"dialog" 或 "others"。
+        kind: 类目名，"dialog" 或 "others"。
+        subdir: 模式对应的子目录名，"full-frame" 或 "crop-band"。
         verbose: 是否打印逐张明细。
 
     Returns:
         逐张判定结果。
 
     Raises:
-        NotADirectoryError: 类目目录不存在时抛出。
+        NotADirectoryError: 语料目录不存在时抛出。
     """
-    directory = ROOT / "examples" / kind
-    if not directory.is_dir():
-        raise NotADirectoryError(f"Corpus directory not found: {directory}")
+    directory = corpus_directory(kind, subdir)
     paths = sorted(p for p in directory.iterdir() if p.is_file() and p.suffix.lower() in _INPUT_SUFFIXES)
 
     results: list[CaseResult] = []
@@ -234,13 +266,16 @@ def main(argv: list[str] | None = None) -> int:
         退出码，全部通过为 0，存在失败为 1。
     """
     args = parse_args(argv)
+    # 裁带模式的样张已是裁好的对话带：置 pre_cropped_band 让门控跳过纵向带比例过滤，
+    # 同时保持 crop_dialogue_band 为假，避免引擎把仅剩的对白再裁掉一遍。
+    subdir = "crop-band" if args.crop_band else "full-frame"
     engine = RapidOCREngine()
-    engine.initialize(RecognitionConfig(crop_dialogue_band=args.crop_band))
+    engine.initialize(RecognitionConfig(crop_dialogue_band=False, pre_cropped_band=args.crop_band))
 
     results: list[CaseResult] = []
     try:
         for kind in ("dialog", "others"):
-            cases = verify_kind(engine, kind, args.verbose)
+            cases = verify_kind(engine, kind, subdir, args.verbose)
             results.extend(cases)
             passed = sum(1 for case in cases if case.passed)
             print(f"{kind}: {passed}/{len(cases)} passed")
@@ -252,8 +287,7 @@ def main(argv: list[str] | None = None) -> int:
         print("\nfailed:")
         for case in failures:
             print(f"  - {case.name}: {case.reason}")
-    mode = "crop-band" if args.crop_band else "full-frame"
-    print(f"\n{len(results) - len(failures)}/{len(results)} passed (mode={mode})")
+    print(f"\n{len(results) - len(failures)}/{len(results)} passed (mode={subdir})")
     return 1 if failures else 0
 
 

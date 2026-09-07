@@ -34,9 +34,16 @@ uv run pyrefly check
 
 # 对话门控回归：验证 examples 语料判定结果（dialog 应出对白、others 不应出声）
 # 改动门控阈值 / 文本过滤规则 / 样张后都必须重跑，详见 docs/dialogue-region-discrimination.md 第 11 章
-uv run python scripts/verify_examples.py                # 全帧路径（判定口径）
-uv run python scripts/verify_examples.py --crop-band    # 裁带路径（桌面默认，回归确认）
+# 语料按输入路径分组：full-frame/ 是全帧样张，crop-band/ 是从中裁出的对话面板（第 13 章）
+uv run python scripts/verify_examples.py                # 全帧路径（判定口径，读 full-frame/）
+uv run python scripts/verify_examples.py --crop-band    # 裁带路径（读 crop-band/，回归确认）
 uv run python scripts/verify_examples.py --verbose      # 打印逐张明细
+
+# 拆分语料并裁出对话面板：把类目目录下平铺的样张搬入 full-frame/，
+# 再按门控判出的「说话人 + 对白」框裁出 crop-band/（无对话要素时回退底部对话带）
+uv run python scripts/split_examples.py --dry-run       # 只出报告，不搬移不写图
+uv run python scripts/split_examples.py                 # dialog + others 全量处理
+uv run python scripts/split_examples.py --kind others   # 只处理某一类目
 
 # 压缩 examples/ 样张（缩小仓库体积）
 # 默认「剥离 alpha + PNG 最高压缩」为无损；任何改变像素的档位压缩后都必须重跑上面的验证
@@ -56,6 +63,9 @@ uv publish --token <pypi-token>
 
 本仓库**没有测试套件**；验证方式为运行程序 + ruff/pyrefly 静态检查 + 打包产物体检，
 外加 `examples/` 语料的门控回归（`scripts/verify_examples.py`，是判定类改动的主要防线）。
+语料按输入路径分为 `examples/<kind>/full-frame/`（全帧样张）与 `examples/<kind>/crop-band/`
+（裁出的对话面板，由 `scripts/split_examples.py` 生成），两组文件名一一对应，
+故 `DIALOG_TRUTH` 按文件名登记的标注可在两条判定路径上复用。
 CI 有两个工作流：发布 Release 时分别构建 Windows exe（`.github/workflows/release-desktop.yml`）
 与上传 PyPI（`.github/workflows/publish-pypi.yml`）。
 
