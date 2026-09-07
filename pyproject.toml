@@ -210,8 +210,15 @@ project-includes = ["src"]
 # src-layout：以 src/ 为导入根，使 `genshin_voice_over` 成为顶层包，
 # 从而正确解析 `from genshin_voice_over.xxx import ...` 这类导入
 search-path = ["src"]
+# 目标平台：项目仅面向 Windows（classifiers 已声明），app/ 下大量使用 ctypes.windll
+# 等 Windows 专有 API。不显式声明时，pyrefly 按**当前**平台解析 typeshed，
+# Linux CI 上会把这些属性判为缺失（missing-attribute）而误报。
+python-platform = "windows"
+
 # 虚拟环境中的第三方包路径，用于 IDE 语言服务器解析已安装依赖（如 numpy）。
 # 命令行 pyrefly 可从解释器自动获取，但 IDE 语言服务器依赖此显式配置。
+# 该路径是 Windows 的 venv 布局，其它平台上 pyrefly 会打印无效路径警告——
+# 仅为 WARN，不影响检查结论。
 site-package-path = [".venv/lib/site-packages"]
 # 目标 Python 版本
 python-version = "3.12"
