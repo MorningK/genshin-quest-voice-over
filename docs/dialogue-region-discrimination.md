@@ -897,6 +897,9 @@ others: 37/38 passed  ← 1 项判定缺陷
    `filter_ui_noise` 仍生效。**显式否决「短纯 ASCII 令牌」的宽规则**——字幕
    本身存在 `OK` 这类纯 ASCII 短句（AGENTS.md 去重不变式即以 `OK@` ↔ `OK`
    为例），宽规则会误伤真对白。
+   补充（见 13.6 节）：该正则最初只对**整串**候选文本生效，`Lv.90` 与对白同帧时
+   拼进 `full_text` 后不再匹配；现已在两个 OCR 后端把过滤提前到**逐框**，
+   与门控路径口径一致。
 3. **未采用**：收紧颜色窗（`S=18` 与对白 `S=8~9` 同属低饱和暖白，无分离度，
    收紧只会误伤）；收紧 `cx`（本例 0.419 居窗口正中，横向无可分离性）。
 
@@ -1009,3 +1012,25 @@ uv run python scripts/verify_examples.py --crop-band # 裁带模式（读 crop-b
 
 脚本幂等：已拆分的语料上重跑会直接复用 `full-frame/` 并重生成裁图；新增样张时
 先按平铺放进类目目录，跑一次脚本即自动归位并裁图，随后补登记 `DIALOG_TRUTH`。
+
+### 13.6 评审收尾：回归防线与逐框过滤
+
+拆分 PR 的评审提出四条意见，本轮处理其中三条（第四条为既有残留风险，已登记）：
+
+| 项 | 问题 | 处理 |
+|---|---|---|
+| 语料完整性 | `corpus_directory()` 只检查目录存在，裁图缺失会缩小分母，极端情况 `0/0 passed` 且成功退出 | 新增 `resolve_corpus()`：目录为空即报错；裁带模式额外要求 `crop-band/` 与 `full-frame/` 的文件名集合一致，缺失/多余都列出具体文件名后以非 0 退出 |
+| 模式与布局匹配 | 回退到平铺目录时 `--crop-band` 仍按「已预裁剪」处理（不裁且跳过纵向过滤），与拆分前的裁带回归不等价 | 裁带模式只接受子目录布局，平铺语料直接报错并提示先跑 `split_examples.py`。选「拒绝」而非「切换为 `crop_dialogue_band=True`」的原因：引擎配置在循环外一次性初始化，两类语料布局不同时无法逐类切换 |
+| dry-run 输入集 | 根目录与 `full-frame/` 同时有图时，`--dry-run` 只报待搬移图，报告张数少于真实运行 | dry-run 返回「`full-frame/` 已有图 + 本次待搬移图」（排除同名重复） |
+| UI 噪声过滤时机 | `filter_ui_noise` 对整串匹配，`Lv.90` 与对白同帧时不命中 | 已修：见下 |
+
+**逐框过滤 `full_text`**：两个 OCR 后端在拼接全帧文本前逐框调用
+`filter_ui_noise`，与门控路径 `classify_boxes`（第 432、494 行）的逐框口径一致。
+影响面经复核限定在降级兜底：`RecognitionResult.text` 仅被 `pipeline.py:397/407`、
+`server.py:437`、`scripts/verify_examples.py:222` 消费，且 `resolve_dialogue_text`
+只在门控未运行时才回退到它；门控路径消费 `roi_text`，不受影响。
+
+本轮验收（改动后重跑）：全帧 53/53、裁带 53/53（dialog 15/15、others 38/38）；
+`ruff check` / `ruff format --check` / `pyrefly check` 全部通过。另有两个负面用例
+已实测：删除 `crop-band/` 后跑 `--crop-band` 报「缺少裁带语料，请先拆分」；
+删掉其中一张裁图则报 `missing=['IMG_3431.PNG']`，两者均以非 0 退出。

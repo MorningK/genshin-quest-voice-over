@@ -12,6 +12,9 @@
 - 裁带模式的样张**已经**是裁好的对话带，故用 ``pre_cropped_band=True`` 初始化：
   门控跳过纵向带比例过滤（纵向阈值是按完整画面标定的，对紧致裁图不成立），
   同时引擎不得再二次裁剪。
+- 语料完整性是硬要求：目录为空、或裁带语料与全帧语料的文件集合不一致时
+  直接报错退出，避免分母缩小导致 ``0/0 passed`` 这类回归假通过；裁带模式
+  也只接受已拆分的子目录布局，平铺语料需先跑 ``scripts/split_examples.py``。
 - ``examples/dialog`` 通过 = 触发朗读，且朗读文本与 ground truth 对白一致，
   且不含说话人名字（防止名字/头衔混入对白）。
 - ``examples/others`` 通过 = 朗读候选经 ``TextTracker.should_play`` 后返回
@@ -173,29 +176,97 @@ def matches(truth: str, actual: str) -> bool:
     return SequenceMatcher(None, expected, got).ratio() >= _SIMILARITY_THRESHOLD
 
 
-def corpus_directory(kind: str, subdir: str) -> Path:
-    """解析某一类目在某个模式下的语料目录。
+@dataclass(frozen=True)
+class CorpusSource:
+    """某一类目在某个模式下的语料来源。
 
-    语料按输入路径分为 ``full-frame/`` 与 ``crop-band/`` 两组；两类目录尚为平铺的
-    旧布局（未拆分）时回退到类目目录本身，保证脚本在拆分前后都能跑。
+    Attributes:
+        directory: 实际读取的语料目录。
+        is_split: 是否命中 ``full-frame/`` / ``crop-band/`` 子目录布局；
+            False 表示回退到类目根目录的平铺布局（拆分前的旧结构）。
+    """
+
+    directory: Path
+    is_split: bool
+
+
+def list_images(directory: Path) -> list[Path]:
+    """列出目录下的图片文件。
+
+    Args:
+        directory: 目标目录；不存在时返回空列表。
+
+    Returns:
+        按文件名排序的图片路径列表。
+    """
+    if not directory.is_dir():
+        return []
+    return sorted(p for p in directory.iterdir() if p.is_file() and p.suffix.lower() in _INPUT_SUFFIXES)
+
+
+def _validate_corpus(kind: str, subdir: str, source: CorpusSource) -> None:
+    """校验语料目录是否可用于回归。
+
+    空目录会让分母退化成 0 而打印 ``0/0 passed`` 并成功退出；裁带语料缺失
+    同样会静默缩小分母。两者都必须在验证开始前拒绝，避免回归假通过。
+
+    Args:
+        kind: 类目名，"dialog" 或 "others"。
+        subdir: 模式对应的子目录名，"full-frame" 或 "crop-band"。
+        source: 解析出的语料来源。
+
+    Raises:
+        ValueError: 目录为空、裁带模式未拆分、或裁带语料与全帧语料文件不一致时抛出。
+    """
+    # 先判布局再判空：未拆分的平铺目录在裁带模式下要先给出「去拆分」的提示，
+    # 否则用户只会看到含义模糊的「目录为空」。
+    if subdir == "crop-band" and not source.is_split:
+        raise ValueError(
+            f"Missing crop-band corpus for '{kind}': {source.directory} is a flat legacy layout. "
+            "Run `uv run python scripts/split_examples.py` to build full-frame/ and crop-band/ first."
+        )
+    if not list_images(source.directory):
+        raise ValueError(f"Corpus directory is empty: {source.directory}")
+    if subdir != "crop-band":
+        return
+    full_names = {path.name for path in list_images(ROOT / "examples" / kind / "full-frame")}
+    band_names = {path.name for path in list_images(source.directory)}
+    missing = sorted(full_names - band_names)
+    unexpected = sorted(band_names - full_names)
+    if missing or unexpected:
+        raise ValueError(
+            f"Incomplete crop-band corpus for '{kind}': missing={missing}, unexpected={unexpected}. "
+            "Run `uv run python scripts/split_examples.py` to regenerate the crops."
+        )
+
+
+def resolve_corpus(kind: str, subdir: str) -> CorpusSource:
+    """按模式解析并校验某一类目的语料目录。
+
+    语料按输入路径分为 ``full-frame/`` 与 ``crop-band/`` 两组；子目录不存在时
+    回退到类目根目录的平铺布局（拆分前的旧结构），全帧模式下仍可跑。
 
     Args:
         kind: 类目名，"dialog" 或 "others"。
         subdir: 模式对应的子目录名，"full-frame" 或 "crop-band"。
 
     Returns:
-        语料目录。
+        通过校验的语料来源。
 
     Raises:
-        NotADirectoryError: 类目目录与其子目录均不存在时抛出。
+        NotADirectoryError: 子目录与平铺目录均不存在时抛出。
+        ValueError: 目录为空、裁带模式未拆分、或裁带语料与全帧语料文件集合不一致时抛出。
     """
     directory = ROOT / "examples" / kind / subdir
-    if directory.is_dir():
-        return directory
     legacy = ROOT / "examples" / kind
-    if legacy.is_dir():
-        return legacy
-    raise NotADirectoryError(f"Corpus directory not found: {directory}")
+    if directory.is_dir():
+        source = CorpusSource(directory=directory, is_split=True)
+    elif legacy.is_dir():
+        source = CorpusSource(directory=legacy, is_split=False)
+    else:
+        raise NotADirectoryError(f"Corpus directory not found: {directory}")
+    _validate_corpus(kind, subdir, source)
+    return source
 
 
 def verify_kind(engine: RapidOCREngine, kind: str, subdir: str, verbose: bool) -> list[CaseResult]:
@@ -212,9 +283,9 @@ def verify_kind(engine: RapidOCREngine, kind: str, subdir: str, verbose: bool) -
 
     Raises:
         NotADirectoryError: 语料目录不存在时抛出。
+        ValueError: 语料目录为空或裁带语料不完整时抛出。
     """
-    directory = corpus_directory(kind, subdir)
-    paths = sorted(p for p in directory.iterdir() if p.is_file() and p.suffix.lower() in _INPUT_SUFFIXES)
+    paths = list_images(resolve_corpus(kind, subdir).directory)
 
     results: list[CaseResult] = []
     for path in paths:
@@ -268,6 +339,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     # 裁带模式的样张已是裁好的对话带：置 pre_cropped_band 让门控跳过纵向带比例过滤，
     # 同时保持 crop_dialogue_band 为假，避免引擎把仅剩的对白再裁掉一遍。
+    # 该语义只对已拆分的 crop-band/ 成立，平铺语料会在 resolve_corpus 里被拒绝。
     subdir = "crop-band" if args.crop_band else "full-frame"
     engine = RapidOCREngine()
     engine.initialize(RecognitionConfig(crop_dialogue_band=False, pre_cropped_band=args.crop_band))

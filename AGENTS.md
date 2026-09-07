@@ -35,6 +35,7 @@ uv run pyrefly check
 # 对话门控回归：验证 examples 语料判定结果（dialog 应出对白、others 不应出声）
 # 改动门控阈值 / 文本过滤规则 / 样张后都必须重跑，详见 docs/dialogue-region-discrimination.md 第 11 章
 # 语料按输入路径分组：full-frame/ 是全帧样张，crop-band/ 是从中裁出的对话面板（第 13 章）
+# 裁带模式要求 crop-band/ 与 full-frame/ 文件齐平，否则脚本报错退出（防回归假通过）
 uv run python scripts/verify_examples.py                # 全帧路径（判定口径，读 full-frame/）
 uv run python scripts/verify_examples.py --crop-band    # 裁带路径（读 crop-band/，回归确认）
 uv run python scripts/verify_examples.py --verbose      # 打印逐张明细

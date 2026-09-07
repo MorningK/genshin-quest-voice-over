@@ -199,9 +199,14 @@ def move_flat_images(kind_dir: Path, full_dir: Path, dry_run: bool) -> list[Path
         if not dry_run:
             path.rename(target)
             logger.info("Moved %s -> %s", path.name, target)
-    # dry-run 下目录未发生实际变化，仍从原位置读取；搬移后统一从 full-frame/ 读取，
-    # 使脚本在已拆分的语料上重跑时保持幂等。
-    return flat if dry_run and flat else list_images(full_dir)
+    if dry_run:
+        # 预演同样要覆盖「已在 full-frame/ 的图」+「本次会搬进去的图」：
+        # 只返回平铺图会让报告张数少于真实运行，混合布局时尤甚。
+        existing = list_images(full_dir)
+        movable = [path for path in flat if not (full_dir / path.name).exists()]
+        return sorted([*existing, *movable], key=lambda path: path.name)
+    # 搬移后统一从 full-frame/ 读取，使脚本在已拆分的语料上重跑时保持幂等。
+    return list_images(full_dir)
 
 
 def reproduce_classification(

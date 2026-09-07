@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     import numpy as np
 
+from genshin_voice_over.app.textproc import filter_ui_noise
 from genshin_voice_over.common import Point
 from genshin_voice_over.recognition.base import (
     RecognitionBox,
@@ -204,10 +205,13 @@ class RapidOCREngine(TextRecognizer):
             confidences.append(float(confidence))
             boxes.append(RecognitionBox(points=points, text=str(text), confidence=float(confidence)))
 
-        # 按坐标区域依"从左到右、从上到下"的阅读顺序重排，再拼接完整文本
+        # 按坐标区域依"从左到右、从上到下"的阅读顺序重排，再拼接完整文本。
+        # 逐框过滤 UI 噪声：门控路径已在 classify_boxes 内逐框过滤，兜底用的
+        # full_text 必须同口径——否则 Lv.90 这类标签与对白同帧时会被拼进整串，
+        # 而下游 filter_ui_noise 对整串做一次匹配无法命中，标签仍会被朗读。
         ordered_boxes = sort_boxes_reading_order(boxes)
         avg_confidence = sum(confidences) / len(confidences) if confidences else 0.0
-        full_text = "".join(b.text for b in ordered_boxes)
+        full_text = "".join(b.text for b in ordered_boxes if filter_ui_noise(b.text) is not None)
 
         # 聚焦底部对白带并把说话人与对白分开：仅对白进入 roi_text 供朗读，
         # 说话人名字与头衔旁路输出，避免它们被当成对白读出来。

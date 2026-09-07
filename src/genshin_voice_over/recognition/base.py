@@ -98,7 +98,10 @@ class RecognitionResult:
     """OCR 识别结果。
 
     Attributes:
-        text: 识别出的完整文本内容。
+        text: 识别出的完整文本内容，已**逐框**过滤 UI 噪声（与门控路径
+            ``classify_boxes`` 的口径一致，避免 ``Lv.90`` 之类的标签与对白同帧时
+            混进整串而无法被下游的整串匹配拦下）。仅在门控未运行时作朗读兜底，
+            门控运行时朗读只消费 ``roi_text``。
         confidence: 整体置信度 (0.0 ~ 1.0)，为各区域置信度的平均值。
         boxes: 按阅读顺序排列的各文字区域列表。
         timestamp: 识别完成时间戳（Unix 秒）。
