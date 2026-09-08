@@ -365,3 +365,30 @@ def locate_region(global_region: Region, monitors: Sequence[_MonitorInfo] | None
         region=rel,
         monitor=MonitorTarget(index=target.index, device_name=target.device_name, physical=target.physical),
     )
+
+
+def locate_screen(global_point: Point, monitors: Sequence[_MonitorInfo] | None = None) -> SelectedRegion:
+    """定位点所在显示器，并返回该显示器的整屏结果。
+
+    整屏以 ``region=None`` 表达：捕获后端据此走整屏分支，同时保留底部对白带
+    聚焦与带级帧门控；若填成满分辨率的 Region 会退化成手动区域模式。
+
+    Args:
+        global_point: 全局坐标点（进程坐标系，来自事件的 ``x_root``/``y_root``）。
+        monitors: 显示器信息列表；为 None 时自动枚举。
+
+    Returns:
+        SelectedRegion，``region`` 为 None 表示整屏，``monitor`` 为该显示器标识。
+
+    Raises:
+        RuntimeError: 显示器枚举失败时抛出。
+    """
+    if monitors is None:
+        monitors = enumerate_monitors()
+    target = _find_monitor(monitors, global_point.x, global_point.y)
+    # 整屏不需要坐标换算：区域由后端按显示器原生分辨率给出，
+    # 只登记显示器身份供后端解析（避免任何 DPI 缩放误差）。
+    return SelectedRegion(
+        region=None,
+        monitor=MonitorTarget(index=target.index, device_name=target.device_name, physical=target.physical),
+    )

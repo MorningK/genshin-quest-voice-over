@@ -115,6 +115,8 @@ uv run python main.py --region 100,200,900,600 --fps 3
 
 # 交互式框选捕获区域（弹出全屏遮罩，鼠标拖拽框选，Esc 取消则回退全屏）
 # 支持扩展屏幕：遮罩覆盖所有显示器，框选后自动定位所在显示器并转换坐标
+# 只单击不拖拽 = 选中该屏整屏（无需拖出一个满屏矩形），整屏默认保留底部对白带聚焦
+# （--full-frame 或配置 full_frame=true 时该优化仍会被覆盖关闭）
 # 注意：--select-region 与 --region 互斥，不可同时使用
 uv run python main.py --select-region --fps 3
 
@@ -137,6 +139,10 @@ uv run python main.py --reset-config
 ```
 
 按 `Ctrl+C` 优雅停止并释放资源。
+
+桌面 GUI（`uv run python gui.py`）的「捕获区域」分组提供同样的两种交互：
+「框选区域…」拖拽框选（单击即取该屏整屏），「选择屏幕…」则在每块显示器上显示编号、分辨率与主屏标记，
+点一下即捕获该屏整屏；选完表单会回到「全屏捕获」并把显示器同步到所选屏。
 
 ### 配置自动保存与恢复
 
@@ -334,7 +340,7 @@ src/genshin_voice_over/              # 可导入顶层包（src-layout）
 ├── app/                             # 应用编排
 │   ├── config.py                    # 运行配置与 CLI 解析
 │   ├── pipeline.py                  # VoiceOverApp 主流程
-│   ├── region_selector.py           # 交互式屏幕区域框选（tkinter，支持多显示器）
+│   ├── region_selector.py           # 交互式屏幕区域框选与整屏选屏（tkinter，支持多显示器）
 │   ├── monitor.py                   # 显示器枚举与多屏坐标转换
 │   ├── textproc.py                  # 文本清洗/去重/变化检测
 │   └── player.py                    # 音频播放（winsound / miniaudio）

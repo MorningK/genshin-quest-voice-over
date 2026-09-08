@@ -26,7 +26,7 @@ from genshin_voice_over.app.config import (
 )
 from genshin_voice_over.app.file_log import attach_file_logging, detach_file_logging
 from genshin_voice_over.app.monitor import enumerate_monitors
-from genshin_voice_over.app.region_selector import select_region_on_root
+from genshin_voice_over.app.region_selector import select_region_on_root, select_screen_on_root
 from genshin_voice_over.common import MonitorTarget, Region, SelectedRegion
 from genshin_voice_over.gui.log_handler import TextLogHandler
 from genshin_voice_over.gui.runner import AppRunner, RunnerState
@@ -296,7 +296,7 @@ class MainWindow:
         )
 
     def _build_region_group(self) -> None:
-        """构建「捕获区域」分组：全屏/手动切换、坐标输入与框选按钮。"""
+        """构建「捕获区域」分组：全屏/手动切换、坐标输入与框选/选屏按钮。"""
         panel = self._make_panel("捕获区域")
         panel.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, _ROW_GAP))
         body = ctk.CTkFrame(panel, fg_color="transparent", corner_radius=0)
@@ -324,6 +324,18 @@ class MainWindow:
         )
         manual.grid(row=0, column=1, sticky="w", padx=(_FIELD_GAP, 0))
         self._config_widgets.extend([fullscreen, manual])
+
+        screen_btn = self._make_button(
+            body,
+            "选择屏幕…",
+            self._on_select_screen,
+            fg_color="#2A2C36",
+            hover_color="#343744",
+            text_color="#D3BC8E",
+            height=32,
+        )
+        screen_btn.grid(row=0, column=7, sticky="e", padx=(0, _FIELD_GAP))
+        self._config_widgets.append(screen_btn)
 
         select_btn = self._make_button(
             body,
@@ -877,11 +889,36 @@ class MainWindow:
     def _on_select_region(self) -> None:
         """唤起全屏遮罩框选捕获区域，完成后回填坐标并切换到手动模式。
 
-        复用主窗口根进行框选，避免新建第二个 Tk 根与嵌套 mainloop；
-        用户取消框选（select_region_on_root 返回 None）时不改动现有表单。
+        拖拽得到自定义区域，单击某块屏幕则得到该屏整屏。复用主窗口根进行
+        选择，避免新建第二个 Tk 根与嵌套 mainloop；用户取消（返回 None）
+        时不改动现有表单。
         """
-        selected = select_region_on_root(self._root)
+        self._apply_selection(select_region_on_root(self._root))
+
+    def _on_select_screen(self) -> None:
+        """唤起每屏高亮覆盖层选择整屏，完成后回到全屏捕获模式。
+
+        覆盖层显示各屏编号、分辨率与主屏标记，点击任意一屏即捕获其整屏；
+        用户取消（返回 None）时不改动现有表单。
+        """
+        self._apply_selection(select_screen_on_root(self._root))
+
+    def _apply_selection(self, selected: SelectedRegion | None) -> None:
+        """把框选/选屏结果回填到捕获区域表单。
+
+        整屏结果（``region`` 为 None）回到「全屏捕获」模式，区域结果填入
+        坐标并切到「手动指定」；两种结果都会同步显示器下拉框。
+
+        Args:
+            selected: 选择结果；None 表示用户取消，表单保持不变。
+        """
         if not isinstance(selected, SelectedRegion):
+            return
+        self._sync_monitor_picker(selected.monitor)
+        if selected.region is None:
+            # 整屏：坐标输入框清空并回到全屏模式，显示器下拉框已同步到所选屏
+            self._clear_region()
+            logger.info("Capture region reset to full screen of selected monitor.")
             return
         region = selected.region
         values = (region.left, region.top, region.right, region.bottom)
@@ -890,7 +927,6 @@ class MainWindow:
             entry.configure(state="normal")
             entry.delete(0, "end")
             entry.insert(0, str(value))
-        self._sync_monitor_picker(selected.monitor)
 
     def _on_close(self) -> None:
         """窗口关闭：停止日志轮询与管道、保存配置、摘除日志并销毁窗口。"""

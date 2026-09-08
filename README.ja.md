@@ -328,7 +328,7 @@ src/genshin_voice_over/              # インポート可能なトップレベ�
 ├── app/                             # アプリケーションのオーケストレーション
 │   ├── config.py                    # 実行設定と CLI 解析
 │   ├── pipeline.py                  # VoiceOverApp メインパイプライン
-│   ├── region_selector.py           # 対話式画面領域選択（tkinter、マルチモニター対応）
+│   ├── region_selector.py           # 対話式の領域ドラッグ選択と画面全体選択（tkinter、マルチモニター対応）
 │   ├── monitor.py                   # モニター列挙とマルチスクリーン座標変換
 │   ├── textproc.py                  # テキストのクレンジング / 重複排除 / 変化検出
 │   └── player.py                    # オーディオ再生（winsound / miniaudio）
