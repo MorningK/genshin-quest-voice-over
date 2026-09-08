@@ -106,15 +106,19 @@ class MonitorTarget:
 
 @dataclass
 class SelectedRegion:
-    """框选得到的捕获区域及目标显示器标识。
+    """框选/选屏得到的捕获区域及目标显示器标识。
 
-    用于表达交互式框选的结果：既包含相对目标显示器左上角的物理像素区域，
-    也记录该显示器的身份（编号 + 设备名 + 物理矩形），供捕获后端解析。
+    用于表达交互式框选或选屏的结果：既包含相对目标显示器左上角的物理像素
+    区域，也记录该显示器的身份（编号 + 设备名 + 物理矩形），供捕获后端解析。
+
+    整屏（选中某块显示器的全部画面）一律用 ``region=None`` 表达，而不是填满
+    显示器分辨率的 Region：后者会被判为手动区域模式并关闭底部对白带聚焦，
+    与「全屏捕获」的既有行为不一致（见 AppConfig.to_recognition_config）。
 
     Attributes:
-        region: 相对所选显示器左上角的物理像素区域。
+        region: 相对所选显示器左上角的物理像素区域；None 表示所选显示器整屏。
         monitor: 目标显示器标识。
     """
 
-    region: Region
+    region: Region | None = None
     monitor: MonitorTarget = field(default_factory=MonitorTarget)

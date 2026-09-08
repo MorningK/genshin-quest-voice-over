@@ -436,7 +436,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--select-region",
         default=None,
         action="store_true",
-        help="通过鼠标拖拽框选捕获区域（与 --region 互斥；取消框选则沿用当前配置）",
+        help=(
+            "通过鼠标框选捕获区域（与 --region 互斥；拖拽为自定义区域，单击某块屏幕则捕获该屏整屏，"
+            "按 Esc 取消则沿用当前配置）"
+        ),
     )
     parser.add_argument("--fps", type=int, default=None, help=f"目标帧率（默认 {DEFAULT_FPS}）")
     parser.add_argument(
@@ -647,7 +650,9 @@ def parse_args(argv: list[str] | None = None) -> AppConfig:
 
     if args.select_region:
         # 交互式框选捕获区域；用户取消（返回 None）时沿用基线配置
-        # （有历史区域则保留，无则全屏），而非强制回退全屏
+        # （有历史区域则保留，无则全屏），而非强制回退全屏。
+        # 单击取屏时 selected.region 为 None，表示该显示器整屏，
+        # 与"全屏捕获"同义，保留底部对白带聚焦。
         selected = select_region()
         if isinstance(selected, SelectedRegion):
             config = replace(config, region=selected.region, monitor=selected.monitor)

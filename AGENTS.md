@@ -18,7 +18,7 @@ uv sync --extra capture --extra ocr-rapid --extra tts-online --extra playback
 
 # 运行桌面端应用（完整 CLI 参数见 --help）
 uv run python main.py
-uv run python main.py --select-region --fps 3          # 交互式框选捕获区域
+uv run python main.py --select-region --fps 3          # 交互式框选捕获区域（拖拽框选 / 单击取该屏整屏）
 uv run python main.py --ocr rapid --gpu                 # GPU 加速 OCR（需 ocr-rapid-gpu 组）
 
 # 运行 Web 服务（本地开发，浏览器打开 http://localhost:8000）
@@ -114,6 +114,7 @@ CI 有三个工作流：PR 与 main 推送时跑 pytest + ruff + pyrefly（`.git
 ### 共享类型与预处理
 
 - 跨模块通用数据类放在 `src/genshin_voice_over/common.py`（`Point`/`Region`/`SelectedRegion`）；仅单模块使用的数据类定义在各自模块内。**禁止用匿名 tuple 表达复合结构**（见下方风格约束）。
+- `SelectedRegion.region` 为 `None` 表示"所选显示器整屏"，**不要**用填满分辨率的 `Region` 表达整屏：`AppConfig.to_recognition_config()` 以 `region is None` 决定是否启用底部对白带裁剪，填满的 Region 会被判为手动区域模式并关掉该优化。框选（拖拽）与选屏（单击/「选择屏幕…」）两条交互共用 `app/region_selector.py` 的覆盖层实现。
 - `src/genshin_voice_over/recognition/preprocess.py` 实现图像增强与底部对白带 ROI 聚焦（OpenCV），依赖缺失时由上层自动跳过。
 - `base.py` 中还实现了识别框阅读顺序排序（垂直重叠判行、行间上下、行内左右），供各 OCR 后端复用。
 

@@ -328,7 +328,7 @@ src/genshin_voice_over/              # 임포트 가능한 최상위 패키지(s
 ├── app/                             # 애플리케이션 오케스트레이션
 │   ├── config.py                    # 런타임 설정과 CLI 파싱
 │   ├── pipeline.py                  # VoiceOverApp 메인 파이프라인
-│   ├── region_selector.py           # 대화형 화면 영역 선택(tkinter, 멀티 모니터 지원)
+│   ├── region_selector.py           # 대화형 영역 드래그 선택 및 화면 전체 선택(tkinter, 멀티 모니터 지원)
 │   ├── monitor.py                   # 모니터 열거와 멀티 화면 좌표 변환
 │   ├── textproc.py                  # 텍스트 정리 / 중복 제거 / 변화 감지
 │   └── player.py                    # 오디오 재생(winsound / miniaudio)
